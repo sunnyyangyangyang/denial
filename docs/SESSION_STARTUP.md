@@ -145,8 +145,8 @@ must request Denial's own startup lock:
 
 `--start-locked` initializes the native authentication state and security gate
 as locked before Flutter starts. The shell's first visual state is therefore
-the lock screen, and the user must authenticate through Denial's PAM-backed
-unlock flow before using the session.
+the lock screen, and the user must authenticate through Denial's password or
+fingerprint unlock flow before using the session.
 
 For example, a greetd autologin can use:
 
@@ -158,6 +158,77 @@ user = "alice"
 
 The regular, authenticated greeter path should continue to launch
 `denial-session` without `--start-locked`.
+
+For simultaneous lock and display-off deadlines, the native input gate closes
+immediately and the output scheduler stops new submissions before powering off.
+On locked wake, Flutter resumes rendering while KMS remains physically off.
+The `denial/lock_frame` handshake asks the secure stage to settle its lock
+entrance, then acknowledge the current wake token after layout. Only subsequent
+render authorizations carry that token. Earlier frames are discarded with their
+GPU fence ownership preserved; a matching frame must finish rendering before it
+can perform the KMS wake modeset. Re-lock and a new wake invalidate old tokens.
+This avoids showing the desktop on wake or flashing the lock UI before power-off.
+Native and Flutter bundles must both support this handshake; a missing or stale
+acknowledgement keeps a locked display off rather than presenting old content.
+
+## Fingerprint unlock
+
+When fprintd is installed and the session user already has a fingerprint
+registered, Denial automatically verifies fingerprints while locked, including
+with `--start-locked`. A completed match unlocks the existing Flutter lock
+screen after PAM account validation succeeds. Successful unlock also wakes
+outputs blanked by Denial and resets the idle deadlines, including when no
+keyboard or pointer input occurred. Password authentication remains available
+in parallel.
+
+When a fingerprint is validated with the display off, Denial keeps the session
+locked while waking the output, then waits 150 ms after the wake frame before
+publishing success. This lets the unlock animation run on the lit display.
+An already-lit display unlocks immediately. A new lock request cancels any
+validated fingerprint waiting for display wake.
+
+Denial talks directly to fprintd on the system bus, using the session user's
+identity and the distribution's existing PolicyKit rules. No PAM fingerprint
+module or additional PolicyKit grant is needed for this integration. On Arch,
+install the optional `fprintd` package, which pulls in the libfprint drivers.
+Missing hardware, absent enrollment, denied authorization, and service failures
+leave password unlock available. While locked, unavailable-reader retries start
+after one second and back off to at most 30 seconds. This avoids a long initial
+delay when session authorization is still being established during startup.
+Rejected fingerprints use an increasing cooldown, up to 30 seconds. A rejected
+scan shows a localized “Fingerprint not recognized” banner for four seconds,
+including before the password panel is opened. This advisory event preserves
+the active password prompt and input focus; unlock clears the banner.
+
+The native authentication worker owns each verification and binds it to the
+current lock epoch and fprintd's unique bus owner. Unlock, re-lock, and shutdown
+invalidate the scan; cleanup stops verification and releases the sensor.
+Fingerprint success also cancels a pending password conversation. Flutter has
+no command that can assert a fingerprint match or bypass the security gate.
+
+Settings shows a Fingerprint section only while fprintd reports a device. It
+initially shows only a sudo password prompt. After password verification it
+offers first-time enrollment or lists enrolled fingers with an Add fingerprint
+button. Enrollment reports scan progress and supports cancellation. Leaving
+the section closes the privileged session and releases any device claim;
+authorization also expires after five minutes.
+
+The Settings process launches `sudo -S -k -- deniald --fingerprint-settings`
+over private stdin/stdout pipes. The helper independently verifies the invoking
+user's password through the `sudo` PAM service, including on hosts configured
+with passwordless sudo, before reading any enrolled-finger metadata. It accepts
+only listing, enrollment of a named finger, and cancellation for that user.
+Passwords are never passed in command arguments or logged. Settings requires
+`sudo` in addition to the optional `fprintd` package.
+
+The isolated fprintd mock tests run as part of `tools/denial-pc test`. They never
+access the system bus or real fingerprint hardware. For the focused Rust suite:
+
+```sh
+cd compositor
+DENIAL_FPRINT_TEST_BUS=1 dbus-run-session -- \
+  cargo test --locked --features flutter --bin deniald authentication::
+```
 
 ## Renderer selection
 

@@ -98,6 +98,12 @@ abstract class AppLocalizations {
     Locale('zh'),
   ];
 
+  /// Accessible label for a home widget resize handle.
+  ///
+  /// In en, this message translates to:
+  /// **'Resize widget'**
+  String get homeResizeWidget;
+
   /// English UI text for actionCancel.
   ///
   /// In en, this message translates to:
@@ -2441,6 +2447,42 @@ abstract class AppLocalizations {
   /// **'Keep the session in memory and enter low power after extended inactivity.'**
   String get settingsAutomaticSuspendToggleDescription;
 
+  /// Label for choosing the kernel memory sleep mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Suspend mode'**
+  String get settingsSuspendMode;
+
+  /// Explanation for the kernel memory sleep mode selector.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose how Linux keeps memory powered. This applies to every suspend while Denial is active.'**
+  String get settingsSuspendModeDescription;
+
+  /// Friendly label for the Linux s2idle memory sleep mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Suspend to idle (s2idle)'**
+  String get settingsSuspendModeS2idle;
+
+  /// Friendly label for the Linux shallow memory sleep mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Standby (shallow)'**
+  String get settingsSuspendModeShallow;
+
+  /// Friendly label for the Linux deep memory sleep mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Suspend to RAM (deep)'**
+  String get settingsSuspendModeDeep;
+
+  /// Disabled suspend mode selector value when Linux exposes no memory sleep mode.
+  ///
+  /// In en, this message translates to:
+  /// **'Unavailable'**
+  String get settingsSuspendModeUnavailable;
+
   /// English UI text for settingsAvailable.
   ///
   /// In en, this message translates to:
@@ -2794,6 +2836,126 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Minimum pixel opacity for blur'**
   String get settingsBackdropBlurOpacityThreshold;
+
+  /// Dark or light appearance for glass surfaces.
+  ///
+  /// In en, this message translates to:
+  /// **'Glass appearance'**
+  String get settingsGlassAppearance;
+
+  /// Shared transparency slider for all shell glass panels and cards.
+  ///
+  /// In en, this message translates to:
+  /// **'Transparency of all glass surfaces'**
+  String get settingsGlassTransparency;
+
+  /// Title for choosing the visual material behind translucent shell surfaces.
+  ///
+  /// In en, this message translates to:
+  /// **'Transparency material'**
+  String get settingsTransparencyTitle;
+
+  /// Transparency material choice that disables backdrop processing.
+  ///
+  /// In en, this message translates to:
+  /// **'Off'**
+  String get settingsTransparencyOff;
+
+  /// Transparency material choice for the existing backdrop blur.
+  ///
+  /// In en, this message translates to:
+  /// **'Blur'**
+  String get settingsTransparencyBlur;
+
+  /// Transparency material choice for Denial's native glass effect.
+  ///
+  /// In en, this message translates to:
+  /// **'Glass'**
+  String get settingsTransparencyGlass;
+
+  /// Description of the disabled transparency material.
+  ///
+  /// In en, this message translates to:
+  /// **'Leave translucent surfaces clear without processing the desktop behind them.'**
+  String get settingsTransparencyOffDescription;
+
+  /// Description of the existing blur material.
+  ///
+  /// In en, this message translates to:
+  /// **'Use Denial’s current fast Gaussian backdrop blur.'**
+  String get settingsTransparencyBlurDescription;
+
+  /// Description of the native glass material.
+  ///
+  /// In en, this message translates to:
+  /// **'Refract the sharp desktop through a frosted, accent-tinted lens with directional edge lighting.'**
+  String get settingsTransparencyGlassDescription;
+
+  /// Glass setting controlling the backdrop blur radius.
+  ///
+  /// In en, this message translates to:
+  /// **'Frost'**
+  String get settingsGlassFrost;
+
+  /// Glass setting controlling intermediate texture resolution.
+  ///
+  /// In en, this message translates to:
+  /// **'Render quality'**
+  String get settingsGlassQuality;
+
+  /// Glass setting controlling the width of the refractive edge.
+  ///
+  /// In en, this message translates to:
+  /// **'Optical thickness'**
+  String get settingsGlassThickness;
+
+  /// Glass setting controlling background displacement.
+  ///
+  /// In en, this message translates to:
+  /// **'Refraction'**
+  String get settingsGlassRefraction;
+
+  /// Glass setting controlling chromatic separation.
+  ///
+  /// In en, this message translates to:
+  /// **'Color dispersion'**
+  String get settingsGlassDispersion;
+
+  /// Glass setting controlling backdrop color saturation.
+  ///
+  /// In en, this message translates to:
+  /// **'Saturation'**
+  String get settingsGlassSaturation;
+
+  /// Glass setting controlling how much of the shell accent is mixed into the material.
+  ///
+  /// In en, this message translates to:
+  /// **'Accent tint'**
+  String get settingsGlassAccentTint;
+
+  /// Glass setting controlling adaptive brightening or darkening.
+  ///
+  /// In en, this message translates to:
+  /// **'Luminosity'**
+  String get settingsGlassBrightness;
+
+  /// Glass setting controlling the angle of the simulated key light.
+  ///
+  /// In en, this message translates to:
+  /// **'Light direction'**
+  String get settingsGlassLightAngle;
+
+  /// Glass setting controlling directional lighting strength.
+  ///
+  /// In en, this message translates to:
+  /// **'Light intensity'**
+  String get settingsGlassLightIntensity;
+
+  /// Glass setting controlling rim and caustic highlights.
+  ///
+  /// In en, this message translates to:
+  /// **'Edge shine'**
+  String get settingsGlassEdgeStrength;
 
   /// English UI text for settingsBackdropDimming.
   ///
@@ -3267,6 +3429,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Scale'**
   String get settingsDisplayScale;
+
+  /// Validation error for a monitor scale outside the editable percentage range.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a value from 50 to 600.'**
+  String get settingsDisplayScaleInvalid;
+
+  /// Label for the common monitor scale preset selector.
+  ///
+  /// In en, this message translates to:
+  /// **'Presets'**
+  String get settingsDisplayScalePreset;
+
+  /// Guidance shown below the editable monitor scale percentage.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter 50–600%. Values are rounded to the nearest supported scale. Below 100% may look softer.'**
+  String get settingsDisplayScaleRange;
 
   /// Label for enabling variable refresh rate on a supported monitor.
   ///
@@ -3946,6 +4126,30 @@ abstract class AppLocalizations {
   /// **'Three-finger swipe right'**
   String get settingsShortcutGestureThreeFingerSwipeRight;
 
+  /// Friendly display name for the four-finger swipe-left gesture.
+  ///
+  /// In en, this message translates to:
+  /// **'Four-finger swipe left'**
+  String get settingsShortcutGestureFourFingerSwipeLeft;
+
+  /// Friendly display name for the four-finger swipe-right gesture.
+  ///
+  /// In en, this message translates to:
+  /// **'Four-finger swipe right'**
+  String get settingsShortcutGestureFourFingerSwipeRight;
+
+  /// Friendly display name for the four-finger swipe-up gesture.
+  ///
+  /// In en, this message translates to:
+  /// **'Four-finger swipe up'**
+  String get settingsShortcutGestureFourFingerSwipeUp;
+
+  /// Friendly display name for the four-finger swipe-down gesture.
+  ///
+  /// In en, this message translates to:
+  /// **'Four-finger swipe down'**
+  String get settingsShortcutGestureFourFingerSwipeDown;
+
   /// Supported shortcut input category.
   ///
   /// In en, this message translates to:
@@ -4084,6 +4288,12 @@ abstract class AppLocalizations {
   /// **'Enter or leave fullscreen'**
   String get settingsShortcutActionToggleFullscreen;
 
+  /// Display name for the shortcut action that pins or unpins the focused window above other windows.
+  ///
+  /// In en, this message translates to:
+  /// **'Toggle always on top'**
+  String get settingsShortcutActionToggleWindowAlwaysOnTop;
+
   /// Display name for the release pointer shortcut action.
   ///
   /// In en, this message translates to:
@@ -4186,6 +4396,42 @@ abstract class AppLocalizations {
   /// **'Swap window downward'**
   String get settingsShortcutActionSwapDown;
 
+  /// Display name for switching to the previous monitor-local workspace.
+  ///
+  /// In en, this message translates to:
+  /// **'Previous workspace'**
+  String get settingsShortcutActionPreviousWorkspace;
+
+  /// Display name for switching to the next monitor-local workspace.
+  ///
+  /// In en, this message translates to:
+  /// **'Next workspace'**
+  String get settingsShortcutActionNextWorkspace;
+
+  /// Display name for moving the focused window to the previous workspace.
+  ///
+  /// In en, this message translates to:
+  /// **'Move window to previous workspace'**
+  String get settingsShortcutActionMoveToPreviousWorkspace;
+
+  /// Display name for moving the focused window to the next workspace.
+  ///
+  /// In en, this message translates to:
+  /// **'Move window to next workspace'**
+  String get settingsShortcutActionMoveToNextWorkspace;
+
+  /// Display name for switching directly to a numbered workspace.
+  ///
+  /// In en, this message translates to:
+  /// **'Switch to workspace {workspace}'**
+  String settingsShortcutActionSwitchWorkspace(int workspace);
+
+  /// Display name for moving the focused window to a numbered workspace.
+  ///
+  /// In en, this message translates to:
+  /// **'Move window to workspace {workspace}'**
+  String settingsShortcutActionMoveToWorkspace(int workspace);
+
   /// English UI text for settingsLayoutDescription.
   ///
   /// In en, this message translates to:
@@ -4204,10 +4450,10 @@ abstract class AppLocalizations {
   /// **'Give every window room to breathe.'**
   String get settingsLayoutTitle;
 
-  /// Explains the difference between stacking and tiling window layouts.
+  /// Explains the available desktop window layouts.
   ///
   /// In en, this message translates to:
-  /// **'Stacking lets windows overlap and move freely. Tiling uses a dynamic binary tree while keeping transient windows floating.'**
+  /// **'Stacking lets windows overlap. Tiling divides the desktop dynamically. Scrolling arranges full-height columns in a focus-following horizontal strip.'**
   String get settingsWindowLayoutDescription;
 
   /// Label for the Dwindle tiling window layout.
@@ -4222,11 +4468,83 @@ abstract class AppLocalizations {
   /// **'Stacking'**
   String get settingsWindowLayoutStacking;
 
+  /// Label for the focus-following horizontal scrolling layout.
+  ///
+  /// In en, this message translates to:
+  /// **'Scrolling'**
+  String get settingsWindowLayoutScrolling;
+
   /// Title for choosing how desktop windows are arranged.
   ///
   /// In en, this message translates to:
   /// **'Window layout'**
   String get settingsWindowLayoutTitle;
+
+  /// Heading for monitor-local workspace settings.
+  ///
+  /// In en, this message translates to:
+  /// **'Workspaces'**
+  String get settingsWorkspacesTitle;
+
+  /// Toggle which enables monitor-local workspaces.
+  ///
+  /// In en, this message translates to:
+  /// **'Enable workspaces'**
+  String get settingsWorkspacesEnable;
+
+  /// Explanation of Denial's monitor-local workspace model.
+  ///
+  /// In en, this message translates to:
+  /// **'Each monitor switches workspaces independently. Minimized windows remain available across every workspace on their monitor.'**
+  String get settingsWorkspacesDescription;
+
+  /// Label for the number of workspaces per monitor.
+  ///
+  /// In en, this message translates to:
+  /// **'Workspace count'**
+  String get settingsWorkspaceCount;
+
+  /// Label for choosing the direction of workspace transition motion.
+  ///
+  /// In en, this message translates to:
+  /// **'Switching direction'**
+  String get settingsWorkspaceSwitchingOrientation;
+
+  /// Label for horizontal workspace transition motion.
+  ///
+  /// In en, this message translates to:
+  /// **'Horizontal'**
+  String get settingsWorkspaceSwitchingHorizontal;
+
+  /// Label for vertical workspace transition motion.
+  ///
+  /// In en, this message translates to:
+  /// **'Vertical'**
+  String get settingsWorkspaceSwitchingVertical;
+
+  /// Accessible and visible label for a numbered workspace.
+  ///
+  /// In en, this message translates to:
+  /// **'Workspace {workspace}'**
+  String workspaceLabel(int workspace);
+
+  /// Accessible workspace state for the currently active workspace.
+  ///
+  /// In en, this message translates to:
+  /// **'active'**
+  String get workspaceActive;
+
+  /// Accessible workspace state when ordinary windows are present.
+  ///
+  /// In en, this message translates to:
+  /// **'occupied'**
+  String get workspaceOccupied;
+
+  /// Accessible workspace state when no ordinary windows are present.
+  ///
+  /// In en, this message translates to:
+  /// **'empty'**
+  String get workspaceEmpty;
 
   /// Short uppercase status label indicating immediate application.
   ///
@@ -6135,6 +6453,324 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Window {windowId}'**
   String windowUntitled(int windowId);
+
+  /// Glass appearance tuning: Advanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Glass tuning'**
+  String get settingsGlassAdvanced;
+
+  /// Glass appearance tuning: Reset.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset glass'**
+  String get settingsGlassReset;
+
+  /// Glass appearance tuning: TuningDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Changes apply immediately. The defaults preserve the original glass effect.'**
+  String get settingsGlassTuningDescription;
+
+  /// Glass appearance tuning: BevelWidth.
+  ///
+  /// In en, this message translates to:
+  /// **'Bevel width'**
+  String get settingsGlassBevelWidth;
+
+  /// Glass appearance tuning: RefractionDepth.
+  ///
+  /// In en, this message translates to:
+  /// **'Refraction depth'**
+  String get settingsGlassRefractionDepth;
+
+  /// Glass appearance tuning: RimWidth.
+  ///
+  /// In en, this message translates to:
+  /// **'Highlight width'**
+  String get settingsGlassRimWidth;
+
+  /// Glass appearance tuning: RimFalloff.
+  ///
+  /// In en, this message translates to:
+  /// **'Highlight falloff'**
+  String get settingsGlassRimFalloff;
+
+  /// Glass appearance tuning: OppositeLight.
+  ///
+  /// In en, this message translates to:
+  /// **'Opposite-edge light'**
+  String get settingsGlassOppositeLight;
+
+  /// Width of the glass highlight in pixels, including fractional values.
+  ///
+  /// In en, this message translates to:
+  /// **'{width} px'**
+  String settingsGlassRimPixels(String width);
+
+  /// Brief lock screen feedback when a fingerprint does not match.
+  ///
+  /// In en, this message translates to:
+  /// **'Fingerprint not recognized'**
+  String get lockFingerprintNotRecognized;
+
+  /// Fingerprint settings: fingerprintSection
+  ///
+  /// In en, this message translates to:
+  /// **'Fingerprint'**
+  String get fingerprintSection;
+
+  /// Fingerprint settings: fingerprintPasswordPrompt
+  ///
+  /// In en, this message translates to:
+  /// **'Enter your sudo password to manage fingerprints.'**
+  String get fingerprintPasswordPrompt;
+
+  /// Fingerprint settings: fingerprintSudoPassword
+  ///
+  /// In en, this message translates to:
+  /// **'Sudo password'**
+  String get fingerprintSudoPassword;
+
+  /// Fingerprint settings: fingerprintContinue
+  ///
+  /// In en, this message translates to:
+  /// **'Continue'**
+  String get fingerprintContinue;
+
+  /// Fingerprint settings: fingerprintDescription
+  ///
+  /// In en, this message translates to:
+  /// **'Use your enrolled fingers to unlock Denial.'**
+  String get fingerprintDescription;
+
+  /// Fingerprint settings: fingerprintEmptyTitle
+  ///
+  /// In en, this message translates to:
+  /// **'No fingerprints enrolled'**
+  String get fingerprintEmptyTitle;
+
+  /// Fingerprint settings: fingerprintEmptyDescription
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a finger below to enroll your first fingerprint.'**
+  String get fingerprintEmptyDescription;
+
+  /// Fingerprint settings: fingerprintChooseFinger
+  ///
+  /// In en, this message translates to:
+  /// **'Finger to enroll'**
+  String get fingerprintChooseFinger;
+
+  /// Fingerprint settings: fingerprintEnroll
+  ///
+  /// In en, this message translates to:
+  /// **'Enroll fingerprint'**
+  String get fingerprintEnroll;
+
+  /// Fingerprint settings: fingerprintAdd
+  ///
+  /// In en, this message translates to:
+  /// **'Add fingerprint'**
+  String get fingerprintAdd;
+
+  /// Fingerprint settings: fingerprintAuthenticationFailed
+  ///
+  /// In en, this message translates to:
+  /// **'Password verification failed. Try again.'**
+  String get fingerprintAuthenticationFailed;
+
+  /// Fingerprint settings: fingerprintExpired
+  ///
+  /// In en, this message translates to:
+  /// **'Enter your password again to continue.'**
+  String get fingerprintExpired;
+
+  /// Fingerprint settings: fingerprintPreparing
+  ///
+  /// In en, this message translates to:
+  /// **'Preparing the fingerprint reader…'**
+  String get fingerprintPreparing;
+
+  /// Fingerprint settings: fingerprintTouchSensor
+  ///
+  /// In en, this message translates to:
+  /// **'Touch and lift your selected finger on the sensor.'**
+  String get fingerprintTouchSensor;
+
+  /// Fingerprint settings: fingerprintEnrolled
+  ///
+  /// In en, this message translates to:
+  /// **'Fingerprint enrolled. You can now use it to unlock Denial.'**
+  String get fingerprintEnrolled;
+
+  /// Fingerprint settings: fingerprintCancelled
+  ///
+  /// In en, this message translates to:
+  /// **'Enrollment cancelled.'**
+  String get fingerprintCancelled;
+
+  /// Fingerprint settings: fingerprintDuplicate
+  ///
+  /// In en, this message translates to:
+  /// **'This fingerprint is already enrolled. Choose another finger.'**
+  String get fingerprintDuplicate;
+
+  /// Fingerprint settings: fingerprintRetry
+  ///
+  /// In en, this message translates to:
+  /// **'Lift your finger and touch the sensor again, adjusting its position.'**
+  String get fingerprintRetry;
+
+  /// Fingerprint settings: fingerprintUnavailable
+  ///
+  /// In en, this message translates to:
+  /// **'Fingerprint management could not complete. Check the reader and try again.'**
+  String get fingerprintUnavailable;
+
+  /// Fingerprint settings: fingerprintProgress
+  ///
+  /// In en, this message translates to:
+  /// **'{completed} of {total} scans'**
+  String fingerprintProgress(int completed, int total);
+
+  /// Fingerprint settings: fingerprintLeftThumb
+  ///
+  /// In en, this message translates to:
+  /// **'Left thumb'**
+  String get fingerprintLeftThumb;
+
+  /// Fingerprint settings: fingerprintLeftIndex
+  ///
+  /// In en, this message translates to:
+  /// **'Left index finger'**
+  String get fingerprintLeftIndex;
+
+  /// Fingerprint settings: fingerprintLeftMiddle
+  ///
+  /// In en, this message translates to:
+  /// **'Left middle finger'**
+  String get fingerprintLeftMiddle;
+
+  /// Fingerprint settings: fingerprintLeftRing
+  ///
+  /// In en, this message translates to:
+  /// **'Left ring finger'**
+  String get fingerprintLeftRing;
+
+  /// Fingerprint settings: fingerprintLeftLittle
+  ///
+  /// In en, this message translates to:
+  /// **'Left little finger'**
+  String get fingerprintLeftLittle;
+
+  /// Fingerprint settings: fingerprintRightThumb
+  ///
+  /// In en, this message translates to:
+  /// **'Right thumb'**
+  String get fingerprintRightThumb;
+
+  /// Fingerprint settings: fingerprintRightIndex
+  ///
+  /// In en, this message translates to:
+  /// **'Right index finger'**
+  String get fingerprintRightIndex;
+
+  /// Fingerprint settings: fingerprintRightMiddle
+  ///
+  /// In en, this message translates to:
+  /// **'Right middle finger'**
+  String get fingerprintRightMiddle;
+
+  /// Fingerprint settings: fingerprintRightRing
+  ///
+  /// In en, this message translates to:
+  /// **'Right ring finger'**
+  String get fingerprintRightRing;
+
+  /// Fingerprint settings: fingerprintRightLittle
+  ///
+  /// In en, this message translates to:
+  /// **'Right little finger'**
+  String get fingerprintRightLittle;
+
+  /// Mobile connectivity and SIM authentication UI.
+  ///
+  /// In en, this message translates to:
+  /// **'Mobile data'**
+  String get mobileData;
+
+  /// Mobile connectivity and SIM authentication UI.
+  ///
+  /// In en, this message translates to:
+  /// **'Connected'**
+  String get mobileConnected;
+
+  /// Mobile connectivity and SIM authentication UI.
+  ///
+  /// In en, this message translates to:
+  /// **'Not connected'**
+  String get mobileDisconnected;
+
+  /// Mobile connectivity and SIM authentication UI.
+  ///
+  /// In en, this message translates to:
+  /// **'Mobile network unavailable'**
+  String get mobileUnavailable;
+
+  /// Mobile connectivity and SIM authentication UI.
+  ///
+  /// In en, this message translates to:
+  /// **'Unable to change mobile data'**
+  String get mobileChangeFailed;
+
+  /// Mobile connectivity and SIM authentication UI.
+  ///
+  /// In en, this message translates to:
+  /// **'Unlock SIM'**
+  String get simPinTitle;
+
+  /// Mobile connectivity and SIM authentication UI.
+  ///
+  /// In en, this message translates to:
+  /// **'SIM PIN'**
+  String get simPinLabel;
+
+  /// Mobile connectivity and SIM authentication UI.
+  ///
+  /// In en, this message translates to:
+  /// **'Unlock SIM'**
+  String get simPinUnlock;
+
+  /// Mobile connectivity and SIM authentication UI.
+  ///
+  /// In en, this message translates to:
+  /// **'Later'**
+  String get simPinLater;
+
+  /// Mobile connectivity and SIM authentication UI.
+  ///
+  /// In en, this message translates to:
+  /// **'SIM could not be unlocked. Check your PIN and remaining attempts.'**
+  String get simPinFailed;
+
+  /// Mobile connectivity and SIM authentication UI.
+  ///
+  /// In en, this message translates to:
+  /// **'SIM requires a PUK. Contact your carrier.'**
+  String get simPukRequired;
+
+  /// Mobile connectivity and SIM authentication UI.
+  ///
+  /// In en, this message translates to:
+  /// **'SIM locked'**
+  String get simLocked;
+
+  /// No description provided for @simPinRetries.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} attempts remaining'**
+  String simPinRetries(int count);
 }
 
 class _AppLocalizationsDelegate

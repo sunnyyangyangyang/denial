@@ -11,6 +11,8 @@ use super::window_management::{
     activate_window, clear_toplevel_state, configure_toplevel_for_output, toplevel_has_state,
 };
 use super::*;
+#[cfg(feature = "flutter")]
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::wayland::selection::{SelectionSource, SelectionTarget};
 use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
@@ -183,6 +185,7 @@ impl WaylandClientBudget {
             budget: Some(Arc::clone(self)),
             surfaces: Mutex::new(HashSet::new()),
             reservation_live: AtomicBool::new(true),
+            peer_uid: None,
         })
     }
 }
@@ -257,6 +260,7 @@ fn opaque_regions_signature(regions: Option<&[Rectangle<i32, Logical>]>) -> (usi
 }
 
 pub(super) struct DenialClientState {
+    pub(super) peer_uid: Option<u32>,
     compositor_state: CompositorClientState,
     budget: Option<Arc<WaylandClientBudget>>,
     surfaces: Mutex<HashSet<ObjectId>>,
@@ -270,6 +274,7 @@ impl Default for DenialClientState {
             budget: None,
             surfaces: Mutex::new(HashSet::new()),
             reservation_live: AtomicBool::new(true),
+            peer_uid: None,
         }
     }
 }
@@ -417,6 +422,49 @@ fn cancel_unsynchronized_surface_commit(surface: &WlSurface) {
     add_blocker(surface, CancelledSurfaceReadiness);
 }
 
+#[cfg(feature = "flutter")]
+fn install_frame_deadline_blocker(
+    loop_handle: &LoopHandle<'static, RuntimeState>,
+    surface: &WlSurface,
+    client: &Client,
+    target: frame_timeline::FrameTargetReservation,
+    blocker: frame_timeline::FrameDeadlineBlocker,
+) -> Option<frame_timeline::FrameDeadlineBlocker> {
+    let deadline_blocker = blocker.clone();
+    let deadline_client = client.clone();
+    let deadline_surface = surface.id();
+    if let Err(error) =
+        loop_handle.insert_source(Timer::from_deadline(target.deadline), move |_, _, state| {
+            if deadline_blocker.cancel_if_pending() {
+                state
+                    .wayland
+                    .as_mut()
+                    .expect("missing Wayland frontend")
+                    .frame_target_missed(target, deadline_surface.clone());
+                let display_handle = state
+                    .wayland
+                    .as_ref()
+                    .expect("missing Wayland frontend")
+                    .display_handle
+                    .clone();
+                state
+                    .client_compositor_state(&deadline_client)
+                    .blocker_cleared(state, &display_handle);
+            }
+            TimeoutAction::Drop
+        })
+    {
+        error!(
+            ?error,
+            surface_id = ?surface.id(),
+            "could not arm exact frame latch deadline"
+        );
+        return None;
+    }
+    add_blocker(surface, blocker.clone());
+    Some(blocker)
+}
+
 fn install_surface_readiness_hook(surface: &WlSurface) {
     add_pre_commit_hook::<RuntimeState, _>(surface, |state, _display, surface| {
         // LoopHandle is deliberately fetched at invocation time: Smithay's
@@ -428,12 +476,16 @@ fn install_surface_readiness_hook(surface: &WlSurface) {
             .expect("missing Wayland frontend")
             .loop_handle
             .clone();
-        let (acquire_point, dmabuf) = with_states(surface, |states| {
+        let (acquire_point, dmabuf, has_new_buffer) = with_states(surface, |states| {
             let mut syncobj = states.cached_state.get::<DrmSyncobjCachedState>();
             let acquire_point = syncobj.pending().acquire_point.clone();
-            let (dmabuf, has_damage, has_frame_callbacks) = {
+            let (dmabuf, has_new_buffer, has_damage, has_frame_callbacks) = {
                 let mut attributes = states.cached_state.get::<SurfaceAttributes>();
                 let pending = attributes.pending();
+                let has_new_buffer = matches!(
+                    pending.buffer.as_ref(),
+                    Some(BufferAssignment::NewBuffer(_))
+                );
                 let dmabuf = pending
                     .buffer
                     .as_ref()
@@ -443,6 +495,7 @@ fn install_surface_readiness_hook(surface: &WlSurface) {
                     });
                 (
                     dmabuf,
+                    has_new_buffer,
                     !pending.damage.is_empty(),
                     !pending.frame_callbacks.is_empty(),
                 )
@@ -457,13 +510,40 @@ fn install_surface_readiness_hook(surface: &WlSurface) {
             }
             #[cfg(not(feature = "flutter"))]
             let _ = (has_damage, has_frame_callbacks);
-            (acquire_point, dmabuf)
+            (acquire_point, dmabuf, has_new_buffer)
         });
+        #[cfg(feature = "flutter")]
+        let frame_target = match state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .accept_frame_timeline_commit(surface, has_new_buffer)
+        {
+            Ok(deadline) => deadline,
+            Err(()) => {
+                cancel_unsynchronized_surface_commit(surface);
+                return;
+            }
+        };
         let Some(dmabuf) = dmabuf else {
+            if let Some(target) = frame_target {
+                state
+                    .wayland
+                    .as_mut()
+                    .expect("missing Wayland frontend")
+                    .frame_target_ready(target, surface.id());
+            }
             return;
         };
         let Some(client) = surface.client() else {
             warn!(surface_id = ?surface.id(), "DMA-BUF commit has no owning Wayland client");
+            if let Some(target) = frame_target {
+                state
+                    .wayland
+                    .as_mut()
+                    .expect("missing Wayland frontend")
+                    .frame_target_missed(target, surface.id());
+            }
             cancel_unsynchronized_surface_commit(surface);
             return;
         };
@@ -471,8 +551,49 @@ fn install_surface_readiness_hook(surface: &WlSurface) {
         if let Some(acquire_point) = acquire_point {
             match acquire_point.generate_blocker() {
                 Ok((blocker, source)) => {
+                    #[cfg(feature = "flutter")]
+                    let frame_deadline_blocker = if let Some(target) = frame_target {
+                        let deadline_blocker = state
+                            .wayland
+                            .as_ref()
+                            .expect("missing Wayland frontend")
+                            .frame_target_blocker(target);
+                        let Some(blocker) = install_frame_deadline_blocker(
+                            &loop_handle,
+                            surface,
+                            &client,
+                            target,
+                            deadline_blocker,
+                        ) else {
+                            state
+                                .wayland
+                                .as_mut()
+                                .expect("missing Wayland frontend")
+                                .frame_target_missed(target, surface.id());
+                            cancel_unsynchronized_surface_commit(surface);
+                            return;
+                        };
+                        Some(blocker)
+                    } else {
+                        None
+                    };
                     let source_client = client.clone();
+                    #[cfg(feature = "flutter")]
+                    let source_surface = surface.id();
                     match loop_handle.insert_source(source, move |_, _, state| {
+                        #[cfg(feature = "flutter")]
+                        if let (Some(blocker), Some(target)) =
+                            (frame_deadline_blocker.as_ref(), frame_target)
+                            && let Some(ready) = blocker.release_if_on_time(Instant::now())
+                        {
+                            let frontend =
+                                state.wayland.as_mut().expect("missing Wayland frontend");
+                            if ready {
+                                frontend.frame_target_ready(target, source_surface.clone());
+                            } else {
+                                frontend.frame_target_missed(target, source_surface.clone());
+                            }
+                        }
                         let display_handle = state
                             .wayland
                             .as_ref()
@@ -505,6 +626,14 @@ fn install_surface_readiness_hook(surface: &WlSurface) {
                         surface_id = ?surface.id(),
                         "could not create explicit DMA-BUF acquire blocker"
                     );
+                    #[cfg(feature = "flutter")]
+                    if let Some(target) = frame_target {
+                        state
+                            .wayland
+                            .as_mut()
+                            .expect("missing Wayland frontend")
+                            .frame_target_missed(target, surface.id());
+                    }
                     cancel_unsynchronized_surface_commit(surface);
                     return;
                 }
@@ -516,10 +645,57 @@ fn install_surface_readiness_hook(surface: &WlSurface) {
         // transaction until the exclusive fence is readable, matching the old
         // C++ compositor's implicit-sync fallback.
         let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ) else {
+            #[cfg(feature = "flutter")]
+            if let Some(target) = frame_target {
+                state
+                    .wayland
+                    .as_mut()
+                    .expect("missing Wayland frontend")
+                    .frame_target_ready(target, surface.id());
+            }
             return;
         };
+        #[cfg(feature = "flutter")]
+        let frame_deadline_blocker = if let Some(target) = frame_target {
+            let deadline_blocker = state
+                .wayland
+                .as_ref()
+                .expect("missing Wayland frontend")
+                .frame_target_blocker(target);
+            let Some(blocker) = install_frame_deadline_blocker(
+                &loop_handle,
+                surface,
+                &client,
+                target,
+                deadline_blocker,
+            ) else {
+                state
+                    .wayland
+                    .as_mut()
+                    .expect("missing Wayland frontend")
+                    .frame_target_missed(target, surface.id());
+                cancel_unsynchronized_surface_commit(surface);
+                return;
+            };
+            Some(blocker)
+        } else {
+            None
+        };
         let source_client = client.clone();
+        #[cfg(feature = "flutter")]
+        let source_surface = surface.id();
         match loop_handle.insert_source(source, move |_, _, state| {
+            #[cfg(feature = "flutter")]
+            if let (Some(blocker), Some(target)) = (frame_deadline_blocker.as_ref(), frame_target)
+                && let Some(ready) = blocker.release_if_on_time(Instant::now())
+            {
+                let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+                if ready {
+                    frontend.frame_target_ready(target, source_surface.clone());
+                } else {
+                    frontend.frame_target_missed(target, source_surface.clone());
+                }
+            }
             let display_handle = state
                 .wayland
                 .as_ref()
@@ -818,13 +994,23 @@ impl CompositorHandler for RuntimeState {
                 #[cfg(not(feature = "flutter"))]
                 let _ = restored;
                 window.on_commit();
+                #[cfg(feature = "flutter")]
+                if frontend.mobile_shell
+                    && !frontend.exact_window_geometries.contains_key(&root.id())
+                {
+                    frontend.configure_mobile_window(&window);
+                }
                 frontend.reconcile_committed_window_geometry(&window);
                 #[cfg(feature = "flutter")]
                 let client_sized_target = frontend.reconcile_client_sized_window_placement(&window);
                 #[cfg(feature = "flutter")]
                 {
                     let current_target_geometry = frontend.window_geometry_target(&window);
-                    if previous_target_geometry != current_target_geometry {
+                    if previous_target_geometry != current_target_geometry
+                        || previous_content_geometry != window.geometry()
+                        || first_buffer
+                        || buffer_removed
+                    {
                         frontend.update_window_output_membership(&window);
                     }
                     committed_window_metadata_changed |= previous_content_geometry

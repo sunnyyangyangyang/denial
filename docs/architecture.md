@@ -92,7 +92,22 @@ DMA-BUF or SHM content into EGL textures, publishes a complete ordered surface
 tree to Flutter, and keeps sampled generations alive until GPU and presentation
 ownership permit release. Intermediate metadata may be coalesced, but client
 frame callbacks and presentation feedback remain tied to physical output
-progress.
+progress. Presentation feedback is captured with each published client buffer,
+carried with the texture generation Flutter actually samples, and retained by
+that rendered output through KMS completion. A later surface commit cannot be
+acknowledged by an older queued desktop frame. Feedback shared across outputs
+is consumed once by the first completed presentation.
+
+The Flutter path publishes physical Wayland output enter/leave events when a
+window is mapped, moved, resized or unmapped. Clients can therefore follow the
+monitor's refresh rate without a whole-desktop membership sweep each frame.
+
+Synchronized surface trees preserve per-surface `wp_alpha_modifier_v1` state
+and all eight Wayland buffer orientations. Opacity changes publish with the
+parent transaction even when the child keeps its buffer. Flutter applies
+orientation after buffer-coordinate cropping and swaps layout dimensions for
+quarter turns. Droidloom can therefore supply original Android layers as
+ordinary subsurfaces instead of flattening every supported task in Android.
 
 ## Input
 
@@ -150,8 +165,8 @@ brightness, and UI-development state. It therefore has its own UI/raster
 threads and cannot add build, layout, paint, or raster work to the compositor's
 desktop frame. The embedded shell receives committed document notifications
 and remains responsible for rendering desktop policy, but it does not host the
-normal Settings window. `DENIA_EMBED_SETTINGS=1` keeps the old in-process path
-as an explicit recovery/development fallback.
+Settings window. Settings launch actions always target the standalone Linux
+application; there is no embedded Settings registration or environment fallback.
 
 Appearance intent lives beside the other shell-owned appearance settings. The
 same committed value selects Denial's semantic light/dark palette and is

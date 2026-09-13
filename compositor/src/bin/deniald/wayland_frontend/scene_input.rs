@@ -43,13 +43,6 @@ pub(super) fn constrain_pointer_to_outputs(
 
 impl WaylandFrontend {
     #[cfg(feature = "flutter")]
-    pub(crate) fn has_pending_frame_callbacks(&self) -> bool {
-        !self.pending_frame_callback_windows.is_empty()
-            || !self.pending_input_method_frame_callbacks.is_empty()
-            || !self.pending_cursor_frame_callback_roots.is_empty()
-    }
-
-    #[cfg(feature = "flutter")]
     pub(super) fn queue_cursor_state_for_flutter_generation(&mut self) {
         self.published_cursor_state = None;
         if !self.pointer_cursor_visible {
@@ -236,26 +229,22 @@ impl WaylandFrontend {
     }
 
     #[cfg(feature = "flutter")]
-    pub fn outputs_submitted(&mut self, output_ids: &[OutputId]) -> Result<(), Box<dyn Error>> {
-        if output_ids.is_empty() {
-            return Ok(());
-        }
-
-        self.presentation.begin_output_batch();
-        for entry in &mut self.outputs {
-            entry.submitted_this_batch = output_ids.contains(&entry.id);
-            if entry.submitted_this_batch {
-                entry.presentation_batch.begin(&entry.output);
-                for window in self.output_window_membership.windows(entry.id) {
-                    entry
-                        .presentation_batch
-                        .submit_window(&entry.output, window);
-                }
+    pub fn sampled_frame_presented(
+        &mut self,
+        presented: crate::PresentedOutput,
+        sampled: &[crate::surface_feedback::SurfaceFeedback],
+    ) -> Result<(), Box<dyn Error>> {
+        if let Some(entry) = self.outputs.iter().find(|entry| entry.id == presented.id) {
+            if self.presentation.presented_sampled(
+                &entry.output,
+                sampled,
+                presented.presented_at,
+                Instant::now().saturating_duration_since(presented.observed_at),
+                presented.sequence,
+            ) {
+                self.display_handle.flush_clients()?;
             }
         }
-        // Submission only captures presentation-feedback objects. Protocol
-        // events are emitted by the matching page flip, so there is nothing
-        // to flush on this boundary.
         Ok(())
     }
 
@@ -267,24 +256,9 @@ impl WaylandFrontend {
         if outputs.is_empty() {
             return Ok(());
         }
-        let mut feedback_delivered = false;
-        let observed_now = Instant::now();
         for presented_output in outputs.iter().copied() {
-            if let Some(entry) = self
-                .outputs
-                .iter_mut()
-                .find(|entry| entry.id == presented_output.id)
-            {
-                feedback_delivered |= self.presentation.presented_output(
-                    &mut entry.presentation_batch,
-                    presented_output.presented_at,
-                    observed_now.saturating_duration_since(presented_output.observed_at),
-                    presented_output.sequence,
-                );
-            }
-        }
-        if feedback_delivered {
-            self.display_handle.flush_clients()?;
+            self.frame_timeline
+                .presented(presented_output.id, presented_output.logical_sequence);
         }
         Ok(())
     }
@@ -292,7 +266,7 @@ impl WaylandFrontend {
     #[cfg(feature = "flutter")]
     pub fn frame_tick(&mut self, tick: FrameTick) -> Result<(), Box<dyn Error>> {
         let callback_time = self.presentation.timeline_time(tick.render_deadline);
-        let mut sent = 0usize;
+        let mut sent = self.publish_frame_grant(tick);
         if !self.pending_frame_callback_windows.is_empty() {
             for window in self.output_window_membership.windows(tick.output) {
                 let Some(root) = window.wl_surface() else {
@@ -403,6 +377,10 @@ impl WaylandFrontend {
             return;
         };
         let mut target = output_geometry;
+        #[cfg(feature = "flutter")]
+        if let Some(mobile) = self.mobile_window_geometry(window) {
+            target = mobile;
+        }
         target.loc = saturating_point_sub(
             saturating_point_sub(target.loc, parent_offset),
             window_geometry.loc,

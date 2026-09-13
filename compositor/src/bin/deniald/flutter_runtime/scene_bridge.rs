@@ -81,6 +81,7 @@ impl FlutterRuntime {
                 .difference(&desired)
                 .filter(|texture_id| {
                     self.screenshot_texture_id != Some(**texture_id)
+                        && self.fingerprint_scene.texture != Some(**texture_id)
                         && !self.retains_cursor_texture(**texture_id)
                         && !self
                             .window_close_texture_leases

@@ -95,6 +95,8 @@ ENGINE_TEST_SESSION_TEMPLATE="$ROOT/dev/denial-engine-test.desktop.in"
 ENGINE_TEST_SESSION_FILE="${DENIAL_ENGINE_TEST_SESSION_FILE:-/usr/share/wayland-sessions/denial-engine-test.desktop}"
 SESSION_TARGET_SOURCE="$ROOT/packaging/denial-session.target"
 SESSION_TARGET_FILE="${DENIAL_SESSION_TARGET_FILE:-/usr/local/lib/systemd/user/denial-session.target}"
+SUSPEND_MODE_HOOK_SOURCE="$ROOT/packaging/denial-suspend-mode"
+SUSPEND_MODE_HOOK_FILE="${DENIAL_SUSPEND_MODE_HOOK_FILE:-/usr/lib/systemd/system-sleep/denial-suspend-mode}"
 PORTAL_TEMPLATE="$ROOT/dev/denial-portals.conf.in"
 PORTAL_FILE="${DENIAL_PORTAL_FILE:-/usr/share/xdg-desktop-portal/denial-portals.conf}"
 DENIAL_PORTAL_DESCRIPTOR_SOURCE="$ROOT/packaging/arch/denial.portal"
@@ -172,8 +174,9 @@ Environment:
   DENIAL_BUILD_JOBS  Explicit Cargo and Flutter build parallelism
   DENIAL_PC_DEDICATED_BUILDER
                      Set to 1 to use every CPU by default
-  DENIA_FLUTTER_RENDERER
+  DENIAL_FLUTTER_RENDERER
                      Development-session renderer: skia or impeller (default: impeller)
+                     DENIA_FLUTTER_RENDERER remains a compatibility alias
 
 The production compositor is deniald and its native client is denialctl. The
 denial-nested binary is a separate visual topology harness and never acquires
@@ -240,8 +243,8 @@ is_compatible_legacy_config() {
 require_managed_config_or_absent() {
     local label="$1"
     local path="$2"
-    [[ -e "$path" || -L "$path" ]] || return
-    grep -Fqx "# Installed by $SCRIPT_DIR/denial-pc" "$path" && return
+    [[ -e "$path" || -L "$path" ]] || return 0
+    grep -Fqx "# Installed by $SCRIPT_DIR/denial-pc" "$path" && return 0
     if is_compatible_legacy_config "$label" "$path"; then
         printf 'Adopting compatible legacy %s: %s\n' "$label" "$path"
         return
@@ -732,12 +735,19 @@ build_all() {
 }
 
 test_compositor() {
+    local -a kernel_test_filters=()
+    if [[ "${DENIAL_SKIP_CPU_CAPACITY_TEST:-0}" == 1 ]]; then
+        # RestrictRealtime on the CI runner rejects SCHED_RESET_ON_FORK.
+        # Keep this kernel integration test enabled for normal local runs.
+        kernel_test_filters=(--skip cpu_scheduling::capacity::tests::hint_preserves_priority_and_does_not_leak_to_new_threads)
+    fi
     require_flutter_bindings
     command -v dbus-run-session >/dev/null 2>&1 \
         || die "dbus-run-session is required for isolated notification service tests"
     (
         cd -- "$COMPOSITOR_ROOT"
         DENIAL_NOTIFICATION_TEST_BUS=1 \
+        DENIAL_FPRINT_TEST_BUS=1 \
         CARGO_TARGET_DIR="$RUST_TARGET" \
         dbus-run-session -- cargo test \
             --locked \
@@ -745,7 +755,8 @@ test_compositor() {
             --lib \
             --bins \
             --tests \
-            --features flutter
+            --features flutter \
+            -- "${kernel_test_filters[@]}"
     )
     run_pinned_cargo test \
         --locked \
@@ -799,23 +810,24 @@ run_compositor() {
 
     local drm_device
     drm_device="$(resolve_drm_device)"
-    local shell_profile="${DENIA_SHELL_PROFILE:-desktop}"
+    local shell_profile="${DENIAL_SHELL_PROFILE-${DENIA_SHELL_PROFILE-desktop}}"
     case "$shell_profile" in
         mobile | desktop) ;;
-        *) die "DENIA_SHELL_PROFILE must be mobile or desktop, got: $shell_profile" ;;
+        *) die "DENIAL_SHELL_PROFILE must be mobile or desktop, got: $shell_profile" ;;
     esac
-    local flutter_renderer="${DENIA_FLUTTER_RENDERER:-impeller}"
+    local flutter_renderer="${DENIAL_FLUTTER_RENDERER-${DENIA_FLUTTER_RENDERER-impeller}}"
     case "$flutter_renderer" in
         skia | impeller) ;;
-        *) die "DENIA_FLUTTER_RENDERER must be skia or impeller, got: $flutter_renderer" ;;
+        *) die "DENIAL_FLUTTER_RENDERER must be skia or impeller, got: $flutter_renderer" ;;
     esac
 
     unset DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE SWAYSOCK I3SOCK
     unset NO_COLOR WLR_DRM_DEVICES AQ_DRM_DEVICES
+    export DENIAL_SHELL_PROFILE="$shell_profile"
     export DENIA_SHELL_PROFILE="$shell_profile"
     export DENIAL_SETTINGS_BINARY="$SETTINGS_BINARY"
     export RUST_BACKTRACE=1
-    export RUST_LOG="${DENIA_RUST_LOG:-deniald=info,smithay=warn}"
+    export RUST_LOG="${DENIAL_RUST_LOG-${DENIA_RUST_LOG-deniald=info,smithay=warn}}"
 
     command -v systemd-cat >/dev/null 2>&1 \
         || die "systemd-cat is required to retain compositor diagnostics"
@@ -846,6 +858,7 @@ check_engine_test() {
         CARGO_TARGET_DIR="$RUST_TARGET" \
         cargo test --locked --jobs "$BUILD_JOBS" \
             -p denial-flutter-engine \
+            --test bundle_abi -- --ignored --exact \
             loads_the_bundled_flutter_engine_abi
     )
     printf 'Verified staged engine ABI and AOT data (sha256 %s).\n' \
@@ -1006,6 +1019,16 @@ show_session_state() {
             "session target" "$SESSION_TARGET_FILE"
     fi
 
+    if [[ ! -e "$SUSPEND_MODE_HOOK_FILE" ]]; then
+        printf 'missing  %-18s %s\n' "suspend mode hook" "$SUSPEND_MODE_HOOK_FILE"
+    elif [[ -x "$SUSPEND_MODE_HOOK_FILE" ]] \
+        && cmp -s -- "$SUSPEND_MODE_HOOK_SOURCE" "$SUSPEND_MODE_HOOK_FILE"; then
+        printf 'ok       %-18s %s\n' "suspend mode hook" "$SUSPEND_MODE_HOOK_FILE"
+    else
+        printf 'stale    %-18s %s (run install-session)\n' \
+            "suspend mode hook" "$SUSPEND_MODE_HOOK_FILE"
+    fi
+
     if [[ -e "$LEGACY_SESSION_FILE" ]]; then
         printf 'stale    %-18s %s (removed by install-session)\n' \
             "legacy SDDM entry" "$LEGACY_SESSION_FILE"
@@ -1068,7 +1091,7 @@ as_root() {
 }
 
 remove_legacy_session_entry() {
-    [[ -e "$LEGACY_SESSION_FILE" ]] || return
+    [[ -e "$LEGACY_SESSION_FILE" ]] || return 0
     if ! grep -Fqx "Name=Denial (Rust)" "$LEGACY_SESSION_FILE" \
         || ! grep -Fqx \
             "Exec=uwsm start -e -D Denial $ROOT/dev/denial-rs-session session" \
@@ -1084,6 +1107,7 @@ remove_legacy_session_entry() {
 install_session() {
     require_file "$SESSION_TEMPLATE"
     require_file "$SESSION_TARGET_SOURCE"
+    require_file "$SUSPEND_MODE_HOOK_SOURCE"
     require_file "$PORTAL_TEMPLATE"
     require_file "$DENIAL_PORTAL_DESCRIPTOR_SOURCE"
     require_file "$DENIAL_PORTAL_DBUS_TEMPLATE"
@@ -1122,8 +1146,10 @@ install_session() {
         "$DENIAL_PORTAL_DBUS_TEMPLATE" > "$dbus_rendered"
     sed "s|@PORTAL_BINARY@|$PORTAL_BINARY|g" \
         "$DENIAL_PORTAL_UNIT_TEMPLATE" > "$unit_rendered"
+    sh -n "$SUSPEND_MODE_HOOK_SOURCE"
     if as_root install -Dm644 "$rendered" "$SESSION_FILE" \
         && as_root install -Dm644 "$SESSION_TARGET_SOURCE" "$SESSION_TARGET_FILE" \
+        && as_root install -Dm755 "$SUSPEND_MODE_HOOK_SOURCE" "$SUSPEND_MODE_HOOK_FILE" \
         && as_root install -Dm644 "$portal_rendered" "$PORTAL_FILE" \
         && as_root install -Dm644 "$wlr_portal_rendered" "$WLR_PORTAL_CONFIG" \
         && as_root install -Dm644 "$DENIAL_PORTAL_DESCRIPTOR_SOURCE" "$DENIAL_PORTAL_DESCRIPTOR" \
@@ -1140,9 +1166,10 @@ install_session() {
         "$dbus_rendered" "$unit_rendered"
     systemctl --user daemon-reload >/dev/null 2>&1 || true
     remove_legacy_session_entry
-    printf 'Installed %s\nInstalled %s\nInstalled %s\nInstalled %s\nInstalled %s\nInstalled %s\nInstalled %s\n' \
+    printf 'Installed %s\nInstalled %s\nInstalled %s\nInstalled %s\nInstalled %s\nInstalled %s\nInstalled %s\nInstalled %s\n' \
         "$SESSION_FILE" "$SESSION_TARGET_FILE" "$PORTAL_FILE" "$WLR_PORTAL_CONFIG" \
-        "$DENIAL_PORTAL_DESCRIPTOR" "$DENIAL_PORTAL_DBUS_SERVICE" "$DENIAL_PORTAL_UNIT"
+        "$DENIAL_PORTAL_DESCRIPTOR" "$DENIAL_PORTAL_DBUS_SERVICE" "$DENIAL_PORTAL_UNIT" \
+        "$SUSPEND_MODE_HOOK_FILE"
     printf 'Log out, then choose "Denial (development)" in the display manager.\n'
 }
 
@@ -1180,7 +1207,7 @@ remove_engine_test_session() {
 }
 
 remove_portal_entry() {
-    [[ -e "$PORTAL_FILE" ]] || return
+    [[ -e "$PORTAL_FILE" ]] || return 0
     if ! grep -Fqx "# Installed by $SCRIPT_DIR/denial-pc" "$PORTAL_FILE"; then
         printf 'warning  refusing to remove unrecognized portal routing %s\n' \
             "$PORTAL_FILE" >&2
@@ -1191,7 +1218,7 @@ remove_portal_entry() {
 }
 
 remove_wlr_portal_config() {
-    [[ -e "$WLR_PORTAL_CONFIG" ]] || return
+    [[ -e "$WLR_PORTAL_CONFIG" ]] || return 0
     if ! grep -Fqx "# Installed by $SCRIPT_DIR/denial-pc" "$WLR_PORTAL_CONFIG"; then
         printf 'warning  refusing to remove unrecognized wlr portal config %s\n' \
             "$WLR_PORTAL_CONFIG" >&2
@@ -1242,7 +1269,7 @@ remove_denial_portal_metadata() {
 }
 
 remove_session_target() {
-    [[ -e "$SESSION_TARGET_FILE" ]] || return
+    [[ -e "$SESSION_TARGET_FILE" ]] || return 0
     if ! grep -Fqx 'BindsTo=graphical-session.target' "$SESSION_TARGET_FILE"; then
         printf 'warning  refusing to remove unrecognized session target %s\n' \
             "$SESSION_TARGET_FILE" >&2

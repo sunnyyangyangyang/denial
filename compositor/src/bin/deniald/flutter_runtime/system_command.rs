@@ -40,6 +40,10 @@ const CANCEL_SCREENSHOT: u8 = 5;
 // to applications. WAYLAND_DISPLAY is installed explicitly below; all other
 // compositor/GPU bootstrap choices belong only to deniald.
 const APPLICATION_ENVIRONMENT_REMOVALS: &[&str] = &[
+    "DENIAL_CPU_PLACEMENT",
+    "DENIAL_BIG_CPUS",
+    "DENIAL_LITTLE_CPUS",
+    denial_core::cpu_affinity::APPLICATION_CPUS_ENV,
     "AQ_DRM_DEVICES",
     "__EGL_VENDOR_LIBRARY_FILENAMES",
     "WLR_DRM_DEVICES",
@@ -64,6 +68,7 @@ const APPLICATION_ENVIRONMENT_REMOVALS: &[&str] = &[
     "LISTEN_PID",
     "SYSTEMD_EXEC_PID",
     "DENIAL_NO_RT",
+    "DENIAL_LAUNCH_REQUEST_ID",
     "DENIA_LAUNCH_REQUEST_ID",
     "DENIAL_SOCKET",
     // This is useful for keeping compositor diagnostics machine-readable, but
@@ -705,6 +710,8 @@ fn application_command(
     // an explicit null can remove DISPLAY or another default deliberately.
     // Per-launch activation metadata below remains compositor-owned.
     application_environment.apply(&mut command, desktop_file_id);
+    // Internal tool metadata must never replace an application's restored mask.
+    command.env_remove(denial_core::cpu_affinity::APPLICATION_CPUS_ENV);
     // calloop's signalfd intentionally blocks the shutdown signals in every
     // compositor thread. A fork inherits that mask, so undo it in the child
     // between fork and exec; otherwise ordinary applications cannot receive
@@ -735,7 +742,10 @@ fn application_command(
         });
     }
     if let Some(request_id) = launch_request_id {
-        command.env("DENIA_LAUNCH_REQUEST_ID", request_id.get().to_string());
+        let request_id = request_id.get().to_string();
+        command
+            .env("DENIAL_LAUNCH_REQUEST_ID", &request_id)
+            .env("DENIA_LAUNCH_REQUEST_ID", request_id);
     }
     if let Some(token) = activation_token {
         command.env("XDG_ACTIVATION_TOKEN", token);

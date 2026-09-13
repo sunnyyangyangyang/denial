@@ -28,12 +28,19 @@ impl WaylandFrontend {
         let pointer_constraints_state =
             PointerConstraintsState::new::<RuntimeState>(&display_handle);
         let viewporter_state = ViewporterState::new::<RuntimeState>(&display_handle);
+        let alpha_modifier_state = AlphaModifierState::new::<RuntimeState>(&display_handle);
         let fractional_scale_manager_state =
             FractionalScaleManagerState::new::<RuntimeState>(&display_handle);
         let xdg_decoration_state = XdgDecorationState::new::<RuntimeState>(&display_handle);
         let cursor_shape_state = CursorShapeManagerState::new::<RuntimeState>(&display_handle);
         let tablet_manager_state = TabletManagerState::new::<RuntimeState>(&display_handle);
         let presentation = presentation::PresentationTracker::new(&display_handle);
+        #[cfg(feature = "flutter")]
+        let frame_timeline = frame_timeline::FrameTimelineManager::new(&display_handle);
+        #[cfg(feature = "flutter")]
+        insets::init(&display_handle);
+        #[cfg(feature = "flutter")]
+        crate::fingerprint_presentation::init(&display_handle);
         #[cfg(feature = "flutter")]
         let idle_inhibitors = IdleInhibitors::new(&display_handle);
         let output_power = OutputPowerManager::new(&display_handle);
@@ -58,6 +65,8 @@ impl WaylandFrontend {
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(&display_handle, "seat0");
         let window_layout_kind = settings.window_layout_kind();
+        #[cfg(feature = "flutter")]
+        let workspace_settings = settings.workspace_settings();
         let keyboard = settings.keyboard();
         let keyboard_layout_names = keyboard.compiled_layout_names()?;
         let xkb_names = keyboard.xkb_names();
@@ -160,10 +169,6 @@ impl WaylandFrontend {
                 )
                     .into(),
                 powered: true,
-                #[cfg(feature = "flutter")]
-                presentation_batch: presentation::OutputPresentationBatch::new(),
-                #[cfg(feature = "flutter")]
-                submitted_this_batch: false,
             });
         }
         let pointer_location = super::scene_input::constrain_pointer_to_outputs(
@@ -237,16 +242,20 @@ impl WaylandFrontend {
             xwayland::scale_for_engine(atlas.engine_scale_120, xwayland_scale_mode);
         let xwayland_dpi = xwayland::dpi(xwayland_scale_120);
         let xwayland_args = ["-dpi".to_owned(), xwayland_dpi.to_string()];
-        let (xwayland, xwayland_client) = XWayland::spawn(
-            &display_handle,
-            None,
-            std::iter::empty::<(String, String)>(),
-            xwayland_args,
-            true,
-            Stdio::null(),
-            Stdio::null(),
-            |_| {},
-        )?;
+        // Smithay has no pre-exec hook here. Temporarily widen this spawning
+        // thread, synchronized with our guard, so Xwayland gets the app domain.
+        let (xwayland, xwayland_client) = crate::cpu_scheduling::with_application_affinity(|| {
+            XWayland::spawn(
+                &display_handle,
+                None,
+                std::iter::empty::<(String, String)>(),
+                xwayland_args,
+                true,
+                Stdio::null(),
+                Stdio::null(),
+                |_| {},
+            )
+        })?;
         xwayland_client
             .get_data::<XWaylandClientData>()
             .expect("Xwayland client is missing compositor state")
@@ -346,6 +355,7 @@ impl WaylandFrontend {
             _relative_pointer_manager_state: relative_pointer_manager_state,
             _pointer_constraints_state: pointer_constraints_state,
             _viewporter_state: viewporter_state,
+            _alpha_modifier_state: alpha_modifier_state,
             _fractional_scale_manager_state: fractional_scale_manager_state,
             xwm: None,
             #[cfg(feature = "flutter")]
@@ -432,6 +442,8 @@ impl WaylandFrontend {
             #[cfg(feature = "flutter")]
             shell_fullscreen_locks: HashSet::new(),
             #[cfg(feature = "flutter")]
+            pinned_windows: HashSet::new(),
+            #[cfg(feature = "flutter")]
             visible_window_ids: HashSet::new(),
             #[cfg(feature = "flutter")]
             input_root_ids: HashMap::new(),
@@ -505,6 +517,24 @@ impl WaylandFrontend {
             retired_input_method_keys: HashSet::new(),
             #[cfg(feature = "flutter")]
             minimized_windows: HashSet::new(),
+            #[cfg(feature = "flutter")]
+            minimized_local_windows: HashSet::new(),
+            #[cfg(feature = "flutter")]
+            workspaces_enabled: workspace_settings.enabled,
+            #[cfg(feature = "flutter")]
+            workspace_count: workspace_settings.count,
+            #[cfg(feature = "flutter")]
+            active_workspaces: snapshot
+                .outputs
+                .iter()
+                .map(|output| (output.id, 1))
+                .collect(),
+            #[cfg(feature = "flutter")]
+            window_workspaces: HashMap::new(),
+            #[cfg(feature = "flutter")]
+            minimized_window_outputs: HashMap::new(),
+            #[cfg(feature = "flutter")]
+            workspace_focus_history: HashMap::new(),
             window_placements,
             restored_window_positions: HashSet::new(),
             client_geometry_state_requests: HashSet::new(),
@@ -520,6 +550,11 @@ impl WaylandFrontend {
             active_keyboard_layout: 0,
             keyboard_configuration_changed: false,
             presentation,
+            #[cfg(feature = "flutter")]
+            frame_timeline,
+            #[cfg(feature = "flutter")]
+            mobile_shell: denial_core::environment::var("DENIAL_SHELL_PROFILE").as_deref()
+                == Ok("mobile"),
             #[cfg(feature = "flutter")]
             idle_inhibitors,
             #[cfg(feature = "flutter")]

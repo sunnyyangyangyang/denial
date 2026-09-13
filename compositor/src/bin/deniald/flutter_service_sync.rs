@@ -3,6 +3,32 @@
 use super::*;
 use serde_json::json;
 
+pub(super) fn synchronize_fingerprint_display_wake(
+    scanouts: &[Scanout],
+    scheduler: &output_scheduler::OutputScheduler,
+    events: &mut RuntimeState,
+) {
+    let outputs_ready = !scanouts.is_empty()
+        && scanouts.iter().all(|scanout| {
+            scanout.powered
+                && scheduler.ready_for_unlock(scanout.output.id)
+                && events.output_power_requests.get(&scanout.output.id) != Some(&false)
+        });
+    let wake = events
+        .authentication
+        .as_ref()
+        .is_some_and(|authentication| {
+            authentication.advance_fingerprint_unlock(Instant::now(), outputs_ready)
+        });
+    if wake {
+        events.fingerprint.authenticated_wake();
+        events.note_user_activity();
+        for scanout in scanouts {
+            events.output_power_requests.insert(scanout.output.id, true);
+        }
+    }
+}
+
 pub(super) fn synchronize_authentication_boundary(events: &mut RuntimeState) {
     let locked = events
         .authentication
@@ -10,6 +36,10 @@ pub(super) fn synchronize_authentication_boundary(events: &mut RuntimeState) {
         .is_some_and(|authentication| authentication.locked());
     if locked == events.session_lock_applied {
         return;
+    }
+
+    if !locked {
+        events.fingerprint.unlocked();
     }
 
     // Balance every client-visible press and cancel every active pointer,
@@ -27,8 +57,14 @@ pub(super) fn synchronize_authentication_boundary(events: &mut RuntimeState) {
     }
     if locked {
         events.pending_shell_actions.clear();
-    } else if let Some(authentication) = events.authentication.as_ref() {
-        authentication.acknowledge_unlocked_boundary();
+    } else {
+        // Fingerprint authentication can succeed without keyboard or pointer
+        // activity. Wake idle-blanked outputs and restart the idle deadlines
+        // before allowing the unlocked session to accept input.
+        events.note_user_activity();
+        if let Some(authentication) = events.authentication.as_ref() {
+            authentication.acknowledge_unlocked_boundary();
+        }
     }
     // The security boundary changes routing, not Wayland scene metadata. The
     // input-method branch above dirties the scene when blocking it actually

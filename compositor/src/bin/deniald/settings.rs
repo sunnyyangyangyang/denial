@@ -23,7 +23,10 @@ use denial_core::portal_protocol::{DesktopColorSchemePreference, DesktopThemeSna
 
 use super::window_layout::WindowLayoutKind;
 
-pub(super) const SETTINGS_SCHEMA_VERSION: u64 = 21;
+pub(super) const SETTINGS_SCHEMA_VERSION: u64 = 25;
+pub(super) const MIN_WORKSPACE_COUNT: u8 = 2;
+pub(super) const MAX_WORKSPACE_COUNT: u8 = 9;
+pub(super) const DEFAULT_WORKSPACE_COUNT: u8 = 4;
 const MAX_SETTINGS_BYTES: usize = 256 * 1024;
 const MAX_APPLICATION_ENVIRONMENT_ENTRIES: usize = 256;
 const MAX_APPLICATION_ENVIRONMENT_APPLICATIONS: usize = 256;
@@ -641,6 +644,10 @@ impl SettingsManager {
         parse_window_layout_kind(&self.document).unwrap_or_default()
     }
 
+    pub(super) fn workspace_settings(&self) -> WorkspaceSettings {
+        parse_workspace_settings(&self.document).unwrap_or_default()
+    }
+
     pub(super) fn document_json(&self) -> Result<String, SettingsError> {
         let bytes = render_document(&self.document)?;
         String::from_utf8(bytes)
@@ -704,6 +711,7 @@ impl SettingsManager {
         let color_scheme_preference = parse_color_scheme_preference(&incoming)?;
         let allow_client_cursor_surfaces = parse_allow_client_cursor_surfaces(&incoming)?;
         parse_window_layout_kind(&incoming)?;
+        parse_workspace_settings(&incoming)?;
         self.prepare(
             incoming,
             self.keyboard.clone(),
@@ -927,6 +935,47 @@ struct ParsedSettingsDocument {
     migrated: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct WorkspaceSettings {
+    pub(super) enabled: bool,
+    pub(super) count: u8,
+    pub(super) switching_orientation: WorkspaceSwitchingOrientation,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum WorkspaceSwitchingOrientation {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
+impl WorkspaceSwitchingOrientation {
+    fn from_settings_name(value: &str) -> Option<Self> {
+        match value {
+            "horizontal" => Some(Self::Horizontal),
+            "vertical" => Some(Self::Vertical),
+            _ => None,
+        }
+    }
+
+    fn settings_name(self) -> &'static str {
+        match self {
+            Self::Horizontal => "horizontal",
+            Self::Vertical => "vertical",
+        }
+    }
+}
+
+impl Default for WorkspaceSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            count: DEFAULT_WORKSPACE_COUNT,
+            switching_orientation: WorkspaceSwitchingOrientation::Horizontal,
+        }
+    }
+}
+
 fn parse_document(bytes: &[u8]) -> Result<ParsedSettingsDocument, SettingsError> {
     if bytes.len() > MAX_SETTINGS_BYTES {
         return Err(SettingsError::Document(format!(
@@ -999,6 +1048,20 @@ fn parse_document(bytes: &[u8]) -> Result<ParsedSettingsDocument, SettingsError>
         WindowLayoutKind::Stacking
     };
     set_window_layout_kind(&mut document, window_layout)?;
+    let had_workspace_settings = document
+        .get("layout")
+        .and_then(Value::as_object)
+        .is_some_and(|layout| {
+            layout.contains_key("workspacesEnabled")
+                && layout.contains_key("workspaceCount")
+                && layout.contains_key("workspaceSwitchingOrientation")
+        });
+    let workspace_settings = if had_workspace_settings {
+        parse_workspace_settings(&document)?
+    } else {
+        WorkspaceSettings::default()
+    };
+    set_workspace_settings(&mut document, workspace_settings)?;
     let migrated = version != SETTINGS_SCHEMA_VERSION
         || !document.contains_key("revision")
         || !document.contains_key("keyboard")
@@ -1007,7 +1070,8 @@ fn parse_document(bytes: &[u8]) -> Result<ParsedSettingsDocument, SettingsError>
         || !had_application_environment
         || !had_color_scheme_preference
         || !had_allow_client_cursor_surfaces
-        || !had_window_layout;
+        || !had_window_layout
+        || !had_workspace_settings;
     document.insert("version".to_owned(), Value::from(SETTINGS_SCHEMA_VERSION));
     document.insert("revision".to_owned(), Value::from(revision));
     document.insert(
@@ -1072,6 +1136,14 @@ fn default_document() -> (
         .expect("default cursor surface setting serializes");
     set_window_layout_kind(&mut document, WindowLayoutKind::Stacking)
         .expect("default window layout setting serializes");
+    set_workspace_settings(&mut document, WorkspaceSettings::default())
+        .expect("default workspace settings serialize");
+    // Seed only new documents; existing automatic panel placement stays intact.
+    document
+        .get_mut("layout")
+        .and_then(Value::as_object_mut)
+        .expect("default layout is an object")
+        .insert("systemBarSide".to_owned(), Value::String("top".to_owned()));
     (
         document,
         revision,
@@ -1185,6 +1257,70 @@ fn set_window_layout_kind(
     layout.insert(
         "windowLayout".to_owned(),
         Value::String(kind.settings_name().to_owned()),
+    );
+    Ok(())
+}
+
+fn parse_workspace_settings(
+    document: &Map<String, Value>,
+) -> Result<WorkspaceSettings, SettingsError> {
+    let layout = document
+        .get("layout")
+        .and_then(Value::as_object)
+        .ok_or_else(|| SettingsError::Document("settings layout must be an object".to_owned()))?;
+    let enabled = layout
+        .get("workspacesEnabled")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            SettingsError::Document(
+                "layout.workspacesEnabled is missing or is not a boolean".to_owned(),
+            )
+        })?;
+    let count = layout
+        .get("workspaceCount")
+        .and_then(Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+        .filter(|value| (MIN_WORKSPACE_COUNT..=MAX_WORKSPACE_COUNT).contains(value))
+        .ok_or_else(|| {
+            SettingsError::Document(format!(
+                "layout.workspaceCount must be within {MIN_WORKSPACE_COUNT}..={MAX_WORKSPACE_COUNT}"
+            ))
+        })?;
+    let switching_orientation = layout
+        .get("workspaceSwitchingOrientation")
+        .and_then(Value::as_str)
+        .and_then(WorkspaceSwitchingOrientation::from_settings_name)
+        .ok_or_else(|| {
+            SettingsError::Document(
+                "layout.workspaceSwitchingOrientation must be horizontal or vertical".to_owned(),
+            )
+        })?;
+    Ok(WorkspaceSettings {
+        enabled,
+        count,
+        switching_orientation,
+    })
+}
+
+fn set_workspace_settings(
+    document: &mut Map<String, Value>,
+    workspaces: WorkspaceSettings,
+) -> Result<(), SettingsError> {
+    if !document.contains_key("layout") {
+        document.insert("layout".to_owned(), Value::Object(Map::new()));
+    }
+    let layout = document
+        .get_mut("layout")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| SettingsError::Document("settings layout must be an object".to_owned()))?;
+    layout.insert(
+        "workspacesEnabled".to_owned(),
+        Value::Bool(workspaces.enabled),
+    );
+    layout.insert("workspaceCount".to_owned(), Value::from(workspaces.count));
+    layout.insert(
+        "workspaceSwitchingOrientation".to_owned(),
+        Value::String(workspaces.switching_orientation.settings_name().to_owned()),
     );
     Ok(())
 }

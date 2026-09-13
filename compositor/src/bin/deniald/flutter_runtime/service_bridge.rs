@@ -185,13 +185,16 @@ impl FlutterRuntime {
         &mut self,
         action: wire::ShellAction,
         monitor_id: Option<i64>,
+        workspace_id: Option<u8>,
     ) -> Result<(), Box<dyn Error>> {
         let engine = self
             .host
             .as_ref()
             .expect("Flutter runtime is shutting down")
             .engine();
-        let event = self.wire.encode_shell_action(action, monitor_id)?;
+        let event = self
+            .wire
+            .encode_shell_action(action, monitor_id, workspace_id)?;
         engine.send_platform_message(wire::TO_FLUTTER_CHANNEL, event)?;
         Ok(())
     }
@@ -297,6 +300,7 @@ impl FlutterRuntime {
             legacy,
             content_hint,
             content_purpose,
+            activation_serial,
         )?;
         engine.send_platform_message(wire::TO_FLUTTER_CHANNEL, update)?;
         self.published_text_input_state = Some(state);

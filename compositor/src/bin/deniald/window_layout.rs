@@ -17,6 +17,7 @@ pub(super) enum WindowLayoutKind {
     #[default]
     Stacking,
     Dwindle,
+    Scrolling,
 }
 
 impl WindowLayoutKind {
@@ -24,6 +25,7 @@ impl WindowLayoutKind {
         match self {
             Self::Stacking => "stacking",
             Self::Dwindle => "dwindle",
+            Self::Scrolling => "scrolling",
         }
     }
 
@@ -31,6 +33,7 @@ impl WindowLayoutKind {
         match name {
             "stacking" => Some(Self::Stacking),
             "dwindle" => Some(Self::Dwindle),
+            "scrolling" => Some(Self::Scrolling),
             _ => None,
         }
     }
@@ -109,6 +112,21 @@ where
     fn contains(&self, window: &WindowId) -> bool;
     fn clear(&mut self);
 
+    /// Reconcile every managed leaf after output or workspace membership
+    /// changes. Layouts with additional row state may retain it here.
+    fn rebuild(&mut self, insertions: Vec<LayoutInsertion<WindowId>>) {
+        self.clear();
+        for insertion in insertions {
+            self.insert(insertion);
+        }
+    }
+
+    /// Mark a managed leaf as active. Layouts with a focus-following viewport
+    /// can update it here; fixed layouts may keep the default no-op.
+    fn activate(&mut self, _window: &WindowId) -> bool {
+        false
+    }
+
     /// Exchange two managed leaves while preserving the layout structure.
     /// Layouts without meaningful positions may keep the default no-op.
     fn swap(&mut self, _first: &WindowId, _second: &WindowId) -> bool {
@@ -120,6 +138,31 @@ where
     /// layout can implement its own size policy without touching input code.
     fn resize(&mut self, _request: LayoutResizeRequest<WindowId>) -> bool {
         false
+    }
+
+    /// Translate a layout-owned horizontal viewport by one gesture delta.
+    /// Fixed layouts keep the default no-op.
+    fn scroll_horizontally(
+        &mut self,
+        _output: OutputId,
+        _work_area: Rectangle<i32, Logical>,
+        _gap: i32,
+        _delta_x: f64,
+    ) -> bool {
+        false
+    }
+
+    /// Settle a translated viewport, optionally cancelling back to its
+    /// original active leaf. The returned leaf should receive keyboard focus.
+    fn finish_horizontal_scroll(
+        &mut self,
+        _output: OutputId,
+        _work_area: Rectangle<i32, Logical>,
+        _gap: i32,
+        _cancelled: bool,
+        _projected_translation: Option<f64>,
+    ) -> Option<WindowId> {
+        None
     }
 
     /// Arrange one output. `gap` is the logical distance between siblings;
@@ -222,6 +265,7 @@ where
     match kind {
         WindowLayoutKind::Stacking => Box::<StackingLayout>::default(),
         WindowLayoutKind::Dwindle => Box::<DwindleLayout<WindowId>>::default(),
+        WindowLayoutKind::Scrolling => Box::<ScrollingLayout<WindowId>>::default(),
     }
 }
 
@@ -590,6 +634,440 @@ where
     }
 }
 
+/// A focus-following horizontal strip of full-height columns.
+///
+/// The layout borrows the infinite horizontal workspace idea from niri, but
+/// gives it a Denial-specific rhythm: every new column starts at three fifths
+/// of the work area and the active column stays centered. Neighboring columns
+/// remain visible at the sides, making the available direction apparent
+/// without requiring a separate overview mode.
+#[derive(Debug)]
+struct ScrollingLayout<WindowId> {
+    rows: HashMap<OutputId, ScrollingRow<WindowId>>,
+}
+
+impl<WindowId> Default for ScrollingLayout<WindowId> {
+    fn default() -> Self {
+        Self {
+            rows: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ScrollingRow<WindowId> {
+    columns: Vec<ScrollingColumn<WindowId>>,
+    active: Option<WindowId>,
+    scroll_translation: f64,
+}
+
+#[derive(Debug)]
+struct ScrollingColumn<WindowId> {
+    window: WindowId,
+    width_fraction: f64,
+}
+
+pub(super) const DEFAULT_SCROLLING_COLUMN_FRACTION: f64 = 3.0 / 5.0;
+const MIN_SCROLLING_COLUMN_FRACTION: f64 = 1.0 / 4.0;
+
+impl<WindowId> ScrollingRow<WindowId>
+where
+    WindowId: Clone + Eq,
+{
+    fn position(&self, window: &WindowId) -> Option<usize> {
+        self.columns
+            .iter()
+            .position(|column| &column.window == window)
+    }
+
+    fn widths(&self, work_width: i32) -> Vec<i64> {
+        self.columns
+            .iter()
+            .map(|column| {
+                (f64::from(work_width) * column.width_fraction)
+                    .round()
+                    .clamp(1.0, f64::from(work_width)) as i64
+            })
+            .collect()
+    }
+
+    fn centers(widths: &[i64], gap: i32) -> Vec<f64> {
+        let mut column_start = 0_i64;
+        widths
+            .iter()
+            .map(|width| {
+                let center = column_start.saturating_add(*width / 2) as f64;
+                column_start = column_start
+                    .saturating_add(*width)
+                    .saturating_add(i64::from(gap));
+                center
+            })
+            .collect()
+    }
+
+    fn active_index(&self) -> usize {
+        self.active
+            .as_ref()
+            .and_then(|active| self.position(active))
+            .unwrap_or_else(|| self.columns.len().saturating_sub(1))
+    }
+
+    fn scroll_horizontally(&mut self, work_width: i32, gap: i32, delta_x: f64) -> bool {
+        if self.columns.len() < 2 || !delta_x.is_finite() || delta_x == 0.0 {
+            return false;
+        }
+        let centers = Self::centers(&self.widths(work_width), gap);
+        let active_center = centers[self.active_index()];
+        let minimum = active_center - centers[centers.len() - 1];
+        let maximum = active_center - centers[0];
+        let next = (self.scroll_translation + delta_x).clamp(minimum, maximum);
+        if (next - self.scroll_translation).abs() < f64::EPSILON {
+            return false;
+        }
+        self.scroll_translation = next;
+        true
+    }
+
+    fn finish_horizontal_scroll(
+        &mut self,
+        work_width: i32,
+        gap: i32,
+        cancelled: bool,
+        projected_translation: Option<f64>,
+    ) -> Option<WindowId> {
+        if self.columns.is_empty() {
+            return None;
+        }
+        let active_index = self.active_index();
+        let selected_index = if cancelled {
+            active_index
+        } else {
+            let centers = Self::centers(&self.widths(work_width), gap);
+            let nearest_index = |translation: f64| {
+                let viewport_center = centers[active_index] - translation;
+                centers
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, left), (_, right)| {
+                        (**left - viewport_center)
+                            .abs()
+                            .total_cmp(&(**right - viewport_center).abs())
+                    })
+                    .map_or(active_index, |(index, _)| index)
+            };
+            let tracked_index = nearest_index(self.scroll_translation);
+            if tracked_index != active_index {
+                // Continued travel is authoritative: settle on the column the
+                // fingers actually reached instead of adding fling distance.
+                tracked_index
+            } else if let Some(projected_translation) =
+                projected_translation.filter(|translation| translation.is_finite())
+            {
+                // Momentum exists only to turn a short flick into one step.
+                // Never let a high release velocity skip several columns.
+                match nearest_index(projected_translation).cmp(&active_index) {
+                    std::cmp::Ordering::Less => active_index.saturating_sub(1),
+                    std::cmp::Ordering::Equal => active_index,
+                    std::cmp::Ordering::Greater => {
+                        active_index.saturating_add(1).min(centers.len() - 1)
+                    }
+                }
+            } else {
+                tracked_index
+            }
+        };
+        let selected = self.columns[selected_index].window.clone();
+        self.active = Some(selected.clone());
+        self.scroll_translation = 0.0;
+        Some(selected)
+    }
+
+    fn arrange(
+        &self,
+        work_area: Rectangle<i32, Logical>,
+        requested_gap: i32,
+    ) -> Vec<LayoutPlacement<WindowId>> {
+        if self.columns.is_empty() {
+            return Vec::new();
+        }
+
+        let work_width = work_area.size.w.max(1);
+        let gap = requested_gap.max(0);
+        let widths = self.widths(work_width);
+        let active_idx = self.active_index();
+        let active_start = widths.iter().take(active_idx).fold(0_i64, |x, width| {
+            x.saturating_add(*width).saturating_add(i64::from(gap))
+        });
+        let viewport_center = i64::from(work_width) / 2;
+        let active_center = active_start.saturating_add(widths[active_idx] / 2);
+        let view_start =
+            active_center.saturating_sub(viewport_center) as f64 - self.scroll_translation;
+
+        let mut column_start = 0_i64;
+        self.columns
+            .iter()
+            .zip(widths)
+            .map(|(column, width)| {
+                let x = (f64::from(work_area.loc.x) + column_start as f64 - view_start)
+                    .round()
+                    .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
+                let width = width.clamp(1, i64::from(i32::MAX)) as i32;
+                column_start = column_start
+                    .saturating_add(i64::from(width))
+                    .saturating_add(i64::from(gap));
+                LayoutPlacement {
+                    window: column.window.clone(),
+                    geometry: Rectangle::new(
+                        Point::from((x, work_area.loc.y)),
+                        Size::from((width, work_area.size.h.max(1))),
+                    ),
+                }
+            })
+            .collect()
+    }
+}
+
+impl<WindowId> WindowLayout<WindowId> for ScrollingLayout<WindowId>
+where
+    WindowId: Clone + Debug + Eq,
+{
+    fn kind(&self) -> WindowLayoutKind {
+        WindowLayoutKind::Scrolling
+    }
+
+    fn insert(&mut self, insertion: LayoutInsertion<WindowId>) {
+        self.remove(&insertion.window);
+        let row = self
+            .rows
+            .entry(insertion.output)
+            .or_insert_with(|| ScrollingRow {
+                columns: Vec::new(),
+                active: None,
+                scroll_translation: 0.0,
+            });
+        let index = insertion
+            .anchor
+            .as_ref()
+            .and_then(|anchor| row.position(anchor))
+            .map_or(row.columns.len(), |anchor| anchor + 1);
+        row.columns.insert(
+            index,
+            ScrollingColumn {
+                window: insertion.window.clone(),
+                width_fraction: DEFAULT_SCROLLING_COLUMN_FRACTION,
+            },
+        );
+        row.active = Some(insertion.window);
+        row.scroll_translation = 0.0;
+    }
+
+    fn remove(&mut self, window: &WindowId) -> bool {
+        let output = self
+            .rows
+            .iter()
+            .find_map(|(output, row)| row.position(window).map(|index| (*output, index)));
+        let Some((output, index)) = output else {
+            return false;
+        };
+        let row = self.rows.get_mut(&output).expect("located scrolling row");
+        let was_active = row.active.as_ref() == Some(window);
+        row.columns.remove(index);
+        row.scroll_translation = 0.0;
+        if row.columns.is_empty() {
+            self.rows.remove(&output);
+        } else if was_active {
+            let next_active = index.checked_sub(1).unwrap_or(0).min(row.columns.len() - 1);
+            row.active = Some(row.columns[next_active].window.clone());
+        }
+        true
+    }
+
+    fn contains(&self, window: &WindowId) -> bool {
+        self.rows.values().any(|row| row.position(window).is_some())
+    }
+
+    fn clear(&mut self) {
+        self.rows.clear();
+    }
+
+    fn rebuild(&mut self, insertions: Vec<LayoutInsertion<WindowId>>) {
+        let previous_rows = std::mem::take(&mut self.rows);
+        let previous_widths = previous_rows
+            .values()
+            .flat_map(|row| &row.columns)
+            .map(|column| (column.window.clone(), column.width_fraction))
+            .collect::<Vec<_>>();
+
+        for (output, previous) in previous_rows {
+            let previous_active_index = previous
+                .active
+                .as_ref()
+                .and_then(|active| previous.position(active));
+            let columns = previous
+                .columns
+                .into_iter()
+                .filter(|column| {
+                    insertions.iter().any(|insertion| {
+                        insertion.output == output && insertion.window == column.window
+                    })
+                })
+                .collect::<Vec<_>>();
+            if columns.is_empty() {
+                continue;
+            }
+            let active = previous
+                .active
+                .filter(|active| columns.iter().any(|column| &column.window == active))
+                .or_else(|| {
+                    previous_active_index.and_then(|index| {
+                        columns
+                            .get(index.min(columns.len() - 1))
+                            .map(|column| column.window.clone())
+                    })
+                });
+            self.rows.insert(
+                output,
+                ScrollingRow {
+                    columns,
+                    active,
+                    scroll_translation: 0.0,
+                },
+            );
+        }
+
+        for insertion in insertions {
+            if self.contains(&insertion.window) {
+                continue;
+            }
+            let width_fraction = previous_widths
+                .iter()
+                .find_map(|(window, width)| (window == &insertion.window).then_some(*width))
+                .unwrap_or(DEFAULT_SCROLLING_COLUMN_FRACTION);
+            let row = self
+                .rows
+                .entry(insertion.output)
+                .or_insert_with(|| ScrollingRow {
+                    columns: Vec::new(),
+                    active: None,
+                    scroll_translation: 0.0,
+                });
+            let index = insertion
+                .anchor
+                .as_ref()
+                .and_then(|anchor| row.position(anchor))
+                .map_or(row.columns.len(), |anchor| anchor + 1);
+            row.columns.insert(
+                index,
+                ScrollingColumn {
+                    window: insertion.window.clone(),
+                    width_fraction,
+                },
+            );
+            row.active.get_or_insert(insertion.window);
+        }
+    }
+
+    fn activate(&mut self, window: &WindowId) -> bool {
+        let Some(row) = self
+            .rows
+            .values_mut()
+            .find(|row| row.position(window).is_some())
+        else {
+            return false;
+        };
+        if row.active.as_ref() == Some(window) && row.scroll_translation == 0.0 {
+            return false;
+        }
+        row.active = Some(window.clone());
+        row.scroll_translation = 0.0;
+        true
+    }
+
+    fn swap(&mut self, first: &WindowId, second: &WindowId) -> bool {
+        if first == second || !self.contains(first) || !self.contains(second) {
+            return false;
+        }
+        for row in self.rows.values_mut() {
+            for column in &mut row.columns {
+                if &column.window == first {
+                    column.window = second.clone();
+                } else if &column.window == second {
+                    column.window = first.clone();
+                }
+            }
+        }
+        true
+    }
+
+    fn resize(&mut self, request: LayoutResizeRequest<WindowId>) -> bool {
+        if !request.delta_x.is_finite()
+            || request.work_area.size.w <= 0
+            || (!request.edges.left && !request.edges.right)
+        {
+            return false;
+        }
+        let Some(column) = self
+            .rows
+            .values_mut()
+            .flat_map(|row| &mut row.columns)
+            .find(|column| column.window == request.window)
+        else {
+            return false;
+        };
+        let signed_delta = if request.edges.left && !request.edges.right {
+            -request.delta_x
+        } else {
+            request.delta_x
+        };
+        let next = (column.width_fraction + signed_delta / f64::from(request.work_area.size.w))
+            .clamp(MIN_SCROLLING_COLUMN_FRACTION, 1.0);
+        if (next - column.width_fraction).abs() < f64::EPSILON {
+            return false;
+        }
+        column.width_fraction = next;
+        true
+    }
+
+    fn scroll_horizontally(
+        &mut self,
+        output: OutputId,
+        work_area: Rectangle<i32, Logical>,
+        gap: i32,
+        delta_x: f64,
+    ) -> bool {
+        self.rows.get_mut(&output).is_some_and(|row| {
+            row.scroll_horizontally(work_area.size.w.max(1), gap.max(0), delta_x)
+        })
+    }
+
+    fn finish_horizontal_scroll(
+        &mut self,
+        output: OutputId,
+        work_area: Rectangle<i32, Logical>,
+        gap: i32,
+        cancelled: bool,
+        projected_translation: Option<f64>,
+    ) -> Option<WindowId> {
+        self.rows.get_mut(&output)?.finish_horizontal_scroll(
+            work_area.size.w.max(1),
+            gap.max(0),
+            cancelled,
+            projected_translation,
+        )
+    }
+
+    fn arrange(
+        &self,
+        output: OutputId,
+        work_area: Rectangle<i32, Logical>,
+        gap: i32,
+    ) -> Vec<LayoutPlacement<WindowId>> {
+        self.rows
+            .get(&output)
+            .map_or_else(Vec::new, |row| row.arrange(work_area, gap))
+    }
+}
+
 fn split_geometry(
     geometry: Rectangle<i32, Logical>,
     requested_gap: i32,
@@ -848,6 +1326,309 @@ mod tests {
                 LayoutPlacement {
                     window: 3,
                     geometry: rect(500, 360, 500, 240),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn scrolling_inserts_after_focus_and_retains_the_active_viewport() {
+        let mut layout = ScrollingLayout::<u64>::default();
+        for window in 1..=3 {
+            layout.insert(LayoutInsertion {
+                window,
+                output: OUTPUT,
+                anchor: (window > 1).then_some(window - 1),
+            });
+        }
+
+        assert_eq!(
+            layout.arrange(OUTPUT, rect(100, 20, 1000, 600), 10),
+            vec![
+                LayoutPlacement {
+                    window: 1,
+                    geometry: rect(-920, 20, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 2,
+                    geometry: rect(-310, 20, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 3,
+                    geometry: rect(300, 20, 600, 600),
+                },
+            ]
+        );
+
+        assert!(layout.activate(&2));
+        assert_eq!(
+            layout.arrange(OUTPUT, rect(100, 20, 1000, 600), 10),
+            vec![
+                LayoutPlacement {
+                    window: 1,
+                    geometry: rect(-310, 20, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 2,
+                    geometry: rect(300, 20, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 3,
+                    geometry: rect(910, 20, 600, 600),
+                },
+            ]
+        );
+
+        layout.rebuild(
+            (1..=3)
+                .rev()
+                .map(|window| LayoutInsertion {
+                    window,
+                    output: OUTPUT,
+                    anchor: (window < 3).then_some(window + 1),
+                })
+                .collect(),
+        );
+        assert_eq!(
+            layout.arrange(OUTPUT, rect(100, 20, 1000, 600), 10),
+            vec![
+                LayoutPlacement {
+                    window: 1,
+                    geometry: rect(-310, 20, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 2,
+                    geometry: rect(300, 20, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 3,
+                    geometry: rect(910, 20, 600, 600),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn scrolling_resize_changes_only_the_selected_column_width() {
+        let mut layout = ScrollingLayout::<u64>::default();
+        for window in 1..=2 {
+            layout.insert(LayoutInsertion {
+                window,
+                output: OUTPUT,
+                anchor: (window > 1).then_some(window - 1),
+            });
+        }
+
+        assert!(layout.resize(LayoutResizeRequest {
+            window: 2,
+            work_area: rect(0, 0, 1000, 600),
+            gap: 10,
+            delta_x: 100.0,
+            delta_y: 0.0,
+            edges: LayoutResizeEdges {
+                right: true,
+                ..LayoutResizeEdges::default()
+            },
+        }));
+        assert_eq!(
+            layout.arrange(OUTPUT, rect(0, 0, 1000, 600), 10),
+            vec![
+                LayoutPlacement {
+                    window: 1,
+                    geometry: rect(-460, 0, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 2,
+                    geometry: rect(150, 0, 700, 600),
+                },
+            ]
+        );
+
+        layout.rebuild(vec![
+            LayoutInsertion {
+                window: 2,
+                output: OUTPUT,
+                anchor: None,
+            },
+            LayoutInsertion {
+                window: 1,
+                output: OUTPUT,
+                anchor: Some(2),
+            },
+        ]);
+        assert_eq!(
+            layout.arrange(OUTPUT, rect(0, 0, 1000, 600), 10),
+            vec![
+                LayoutPlacement {
+                    window: 1,
+                    geometry: rect(-460, 0, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 2,
+                    geometry: rect(150, 0, 700, 600),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn scrolling_gesture_tracks_motion_and_settles_to_nearest_column() {
+        let mut layout = ScrollingLayout::<u64>::default();
+        for window in 1..=3 {
+            layout.insert(LayoutInsertion {
+                window,
+                output: OUTPUT,
+                anchor: (window > 1).then_some(window - 1),
+            });
+        }
+        assert!(layout.activate(&2));
+
+        assert!(layout.scroll_horizontally(OUTPUT, rect(0, 0, 1000, 600), 10, -400.0,));
+        assert_eq!(
+            layout.arrange(OUTPUT, rect(0, 0, 1000, 600), 10),
+            vec![
+                LayoutPlacement {
+                    window: 1,
+                    geometry: rect(-810, 0, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 2,
+                    geometry: rect(-200, 0, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 3,
+                    geometry: rect(410, 0, 600, 600),
+                },
+            ]
+        );
+        assert_eq!(
+            layout.finish_horizontal_scroll(OUTPUT, rect(0, 0, 1000, 600), 10, false, None,),
+            Some(3)
+        );
+        assert_eq!(
+            layout.arrange(OUTPUT, rect(0, 0, 1000, 600), 10),
+            vec![
+                LayoutPlacement {
+                    window: 1,
+                    geometry: rect(-1020, 0, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 2,
+                    geometry: rect(-410, 0, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 3,
+                    geometry: rect(200, 0, 600, 600),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn scrolling_flick_is_capped_to_one_column_despite_high_velocity() {
+        let mut layout = ScrollingLayout::<u64>::default();
+        for window in 1..=7 {
+            layout.insert(LayoutInsertion {
+                window,
+                output: OUTPUT,
+                anchor: (window > 1).then_some(window - 1),
+            });
+        }
+        assert!(layout.activate(&4));
+
+        // The tracked distance alone is below the nearest-column threshold,
+        // while an intentionally extreme release projection crosses several.
+        assert!(layout.scroll_horizontally(OUTPUT, rect(0, 0, 1000, 600), 10, -100.0));
+        assert_eq!(
+            layout.finish_horizontal_scroll(
+                OUTPUT,
+                rect(0, 0, 1000, 600),
+                10,
+                false,
+                Some(-10_000.0),
+            ),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn continued_scrolling_settles_by_travel_without_extra_fling() {
+        let mut layout = ScrollingLayout::<u64>::default();
+        for window in 1..=5 {
+            layout.insert(LayoutInsertion {
+                window,
+                output: OUTPUT,
+                anchor: (window > 1).then_some(window - 1),
+            });
+        }
+        assert!(layout.activate(&2));
+
+        assert!(layout.scroll_horizontally(OUTPUT, rect(0, 0, 1000, 600), 10, -1_300.0));
+        assert_eq!(
+            layout.finish_horizontal_scroll(
+                OUTPUT,
+                rect(0, 0, 1000, 600),
+                10,
+                false,
+                Some(-10_000.0),
+            ),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn cancelled_scrolling_gesture_returns_to_original_column() {
+        let mut layout = ScrollingLayout::<u64>::default();
+        for window in 1..=2 {
+            layout.insert(LayoutInsertion {
+                window,
+                output: OUTPUT,
+                anchor: (window > 1).then_some(window - 1),
+            });
+        }
+
+        assert!(layout.scroll_horizontally(OUTPUT, rect(0, 0, 1000, 600), 10, 250.0,));
+        assert_eq!(
+            layout.finish_horizontal_scroll(OUTPUT, rect(0, 0, 1000, 600), 10, true, None,),
+            Some(2)
+        );
+        assert_eq!(
+            layout.arrange(OUTPUT, rect(0, 0, 1000, 600), 10),
+            vec![
+                LayoutPlacement {
+                    window: 1,
+                    geometry: rect(-410, 0, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 2,
+                    geometry: rect(200, 0, 600, 600),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn scrolling_removal_returns_focus_to_the_left_neighbor() {
+        let mut layout = ScrollingLayout::<u64>::default();
+        for window in 1..=3 {
+            layout.insert(LayoutInsertion {
+                window,
+                output: OUTPUT,
+                anchor: (window > 1).then_some(window - 1),
+            });
+        }
+
+        assert!(layout.remove(&3));
+        assert_eq!(
+            layout.arrange(OUTPUT, rect(0, 0, 1000, 600), 0),
+            vec![
+                LayoutPlacement {
+                    window: 1,
+                    geometry: rect(-400, 0, 600, 600),
+                },
+                LayoutPlacement {
+                    window: 2,
+                    geometry: rect(200, 0, 600, 600),
                 },
             ]
         );

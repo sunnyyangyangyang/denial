@@ -1,6 +1,6 @@
 //! Bounded calloop dispatch for Flutter, Wayland, KMS, and control-plane events.
 
-use super::kms_pipeline::{HotplugRequest, apply_hotplug_topology, ticker_refresh_millihz};
+use super::kms_pipeline::{HotplugRequest, apply_hotplug_topology};
 use super::kms_session::{
     log_shutdown, recover_stalled_kms_presentation, service_session_lifecycle,
 };
@@ -71,7 +71,9 @@ pub(super) struct FlutterEventLoopContext<'a, 'event_loop> {
     pub(super) output_control: output_control::OutputControlPublisher,
     pub(super) portal_ipc: Option<portal_ipc::PortalIpcPublisher>,
     pub(super) wayland: Option<wayland_frontend::WaylandFrontend>,
-    pub(super) flutter: flutter_runtime::FlutterRuntime,
+    // The startup boundary retains ownership so an error or unwind cannot
+    // destroy the engine before that boundary releases DRM master.
+    pub(super) flutter: &'a mut Option<flutter_runtime::FlutterRuntime>,
     pub(super) flutter_launcher: &'a mut FlutterLauncher,
     pub(super) duration: Option<Duration>,
     pub(super) frame_limit: Option<u64>,
@@ -106,32 +108,6 @@ pub(super) fn run_flutter_event_loop(
     use smithay::reexports::calloop::channel::{Event as ChannelEvent, channel, sync_channel};
 
     let persistence_available = output_config.is_some();
-    let native_app_snapshot = topology.snapshot();
-    let native_app_atlas = AtlasPlan::for_snapshot(&native_app_snapshot)
-        .ok_or("native application plugin initialization has no output atlas")?;
-    let native_app_refresh_millihz = ticker_refresh_millihz(&native_app_snapshot)?;
-    let native_app_plugins = native_app_plugin::NativeAppPluginManager::load_configured(
-        drm.as_fd(),
-        native_app_atlas.engine_scale_120,
-        SCALE_BASE,
-        native_app_refresh_millihz,
-    )?;
-    let native_plugin_poll_descriptors = native_app_plugins
-        .as_ref()
-        .map(native_app_plugin::NativeAppPluginManager::poll_descriptors)
-        .transpose()?
-        .unwrap_or_default();
-    let native_plugin_formats = renderer
-        .dmabuf_formats()
-        .iter()
-        .filter(|format| format.modifier != Modifier::Invalid)
-        .take(native_app_plugin::MAX_FORMATS)
-        .map(|format| native_app_plugin::NativeAppFormatV1 {
-            format: format.code as u32,
-            modifier: u64::from(format.modifier),
-        })
-        .collect::<Vec<_>>();
-    let (native_release_sender, native_release_source) = channel();
     let started = Instant::now();
     let deadline = duration
         .map(|duration| {
@@ -187,8 +163,11 @@ pub(super) fn run_flutter_event_loop(
             None
         }
     };
-    let authentication = Some(flutter.authentication());
-    let clipboard = flutter.clipboard();
+    let initial_runtime = flutter
+        .as_ref()
+        .ok_or("Flutter runtime was not initialized")?;
+    let authentication = Some(initial_runtime.authentication());
+    let clipboard = initial_runtime.clipboard();
     let native_escape_shortcut = wayland
         .as_ref()
         .map(|frontend| frontend.shortcuts.engine())
@@ -211,13 +190,6 @@ pub(super) fn run_flutter_event_loop(
         authentication,
         flutter_active: true,
         flutter_input: flutter_runtime::InputQueue::new(swapchain.desktop_size()),
-        native_app_plugins,
-        native_release_sender: Some(native_release_sender),
-        native_plugin_formats,
-        native_plugin_default_size: (
-            swapchain.desktop_size().width,
-            swapchain.desktop_size().height,
-        ),
         output_control: Some(output_control.clone()),
         ..RuntimeState::default()
     };
@@ -237,34 +209,6 @@ pub(super) fn run_flutter_event_loop(
             None
         }
     };
-    event_loop.handle().insert_source(
-        native_release_source,
-        |event, _, state: &mut RuntimeState| {
-            if let ChannelEvent::Msg(command) = event {
-                state.native_release_commands.push_back(command);
-            }
-        },
-    )?;
-    for (plugin_index, descriptor) in native_plugin_poll_descriptors {
-        event_loop.handle().insert_source(
-            Generic::new(descriptor, Interest::READ, PollMode::Level),
-            move |_, _, state: &mut RuntimeState| {
-                let mut actions = std::mem::take(&mut state.native_plugin_actions);
-                let result = match state.native_app_plugins.as_mut() {
-                    Some(manager) => manager
-                        .dispatch(plugin_index, &mut actions)
-                        .map_err(|error| error.to_string()),
-                    None => Err("native application plugin manager disappeared".to_owned()),
-                };
-                state.native_plugin_actions = actions;
-                if let Err(error) = result {
-                    warn!(plugin_index, %error, "disabled failed native application plugin event source");
-                    return Ok(PostAction::Remove);
-                }
-                Ok(PostAction::Continue)
-            },
-        )?;
-    }
     let (volition_event_sender, volition_event_source) = sync_channel(8);
     event_loop.handle().insert_source(
         volition_event_source,
@@ -278,7 +222,6 @@ pub(super) fn run_flutter_event_loop(
     let mut raster_frames = 0u64;
     let mut delivered_vsyncs = 0u64;
     let mut retired_output_flips = 0u64;
-    let mut flutter = Some(flutter);
     let mut scheduler = output_scheduler::OutputScheduler::new(
         drm,
         volition_event_sender.clone(),
@@ -322,17 +265,28 @@ pub(super) fn run_flutter_event_loop(
         if events
             .lifecycle
             .requires_kms_service(drm.is_active(), events.device_removed)
+            && let Err(error) = service_session_lifecycle(
+                drm,
+                scanouts,
+                swapchain,
+                event_loop,
+                &mut events,
+                deadline,
+            )
         {
-            service_session_lifecycle(drm, scanouts, swapchain, event_loop, &mut events, deadline)?;
+            if !error.is::<kms_session::KmsResumeError>() {
+                return Err(error);
+            }
+            // Another VT may have changed connector/CRTC assignments. A
+            // rejected pre-pause state needs a fresh topology, not an exit.
+            warn!(%error, "scheduling KMS recovery after session resume failed");
+            events.kms_presentation_recovery_requested = true;
         }
         if events.kms_presentation_recovery_requested {
             events.kms_presentation_recovery_requested = false;
             scheduler.shutdown_volition();
             recover_stalled_kms_presentation(drm, event_loop, &mut events)?;
             continue;
-        }
-        if flutter_session::native_app_plugins_require_service(&events) {
-            service_native_app_plugins(event_loop, &mut events, allocator)?;
         }
         let iteration_now = Instant::now();
         if events.dpms_topology.service_deadline(iteration_now) {
@@ -482,6 +436,19 @@ pub(super) fn run_flutter_event_loop(
             )?;
         }
         if !scanout_rebased {
+            let (changed, power) = events.fingerprint.service(
+                drm,
+                renderer,
+                scanouts,
+                flutter.as_mut().ok_or("fingerprint requires Flutter")?,
+            )?;
+            for (output, powered) in power {
+                events.output_power_requests.insert(output, powered);
+            }
+            if changed {
+                frame_scheduler.mark_all_dirty();
+                wayland_frontend::reset_all_input_devices(&mut events);
+            }
             let runtime = flutter
                 .as_mut()
                 .ok_or("Flutter runtime disappeared during page-flip completion")?;
@@ -542,7 +509,7 @@ pub(super) fn run_flutter_event_loop(
             // following frame already occupies Ready. Move that frame into
             // the now-free Volition slot before the timer decision, exposing
             // the third pool entry for exactly one new raster lookahead.
-            submit_ready_frames(&mut scheduler, swapchain, scanouts, &mut events)?;
+            submit_ready_frames(runtime, &mut scheduler, swapchain, scanouts, &mut events)?;
 
             loop {
                 let Some(ready) =
@@ -590,8 +557,8 @@ pub(super) fn run_flutter_event_loop(
                 ready_output_apply.is_some() || !events.pending_output_applies.is_empty();
             if !output_apply_waiting && frame_limit.is_none_or(|limit| raster_frames < limit) {
                 let frame_action = runtime.with_frame_readiness(|pending, target_available| {
-                    frame_scheduler.step_with_output_availability(frame_now, pending, |output| {
-                        scheduler.render_available(output) && target_available(output)
+                    frame_scheduler.step_with_output_readiness(frame_now, pending, |output| {
+                        (scheduler.render_available(output), target_available(output))
                     })
                 });
                 match frame_action {
@@ -613,13 +580,9 @@ pub(super) fn run_flutter_event_loop(
             // This remains ahead of input, Wayland traversal, and background
             // shell synchronization, but follows frame-clock authorization so
             // those tasks cannot perturb Flutter's animation timestamp.
-            submit_ready_frames(&mut scheduler, swapchain, scanouts, &mut events)?;
+            submit_ready_frames(runtime, &mut scheduler, swapchain, scanouts, &mut events)?;
             for tick in frame_scheduler.output_ticks().iter().copied() {
-                if let Some(frontend) = events
-                    .wayland
-                    .as_mut()
-                    .filter(|frontend| frontend.has_pending_frame_callbacks())
-                {
+                if let Some(frontend) = events.wayland.as_mut() {
                     frontend.frame_tick(tick)?;
                 }
                 scheduler.process_screencopies_at_tick(
@@ -686,6 +649,9 @@ pub(super) fn run_flutter_event_loop(
         if background_maintenance_due {
             synchronize_idle_dpms(scanouts, &mut events, background_started);
         }
+        dpms::synchronize_wake_gestures(scanouts, &mut events);
+        synchronize_power_button(scanouts, &mut events);
+        synchronize_fingerprint_display_wake(scanouts, &scheduler, &mut events);
         // The synchronous VT-resume commit invalidated the old scheduler's
         // per-output buffer ownership. Preserve requests until the topology
         // path below recreates that scheduler.
@@ -806,7 +772,15 @@ pub(super) fn run_flutter_event_loop(
                 continue;
             }
             if scheduler.has_pending_scanout_work() {
-                submit_ready_frames(&mut scheduler, swapchain, scanouts, &mut events)?;
+                submit_ready_frames(
+                    flutter
+                        .as_ref()
+                        .ok_or("Flutter runtime disappeared before frame submission")?,
+                    &mut scheduler,
+                    swapchain,
+                    scanouts,
+                    &mut events,
+                )?;
                 events.pending_output_applies.push_front(request);
                 let now = Instant::now();
                 let timeout = deadline.map_or(Duration::from_millis(50), |deadline| {
@@ -850,7 +824,15 @@ pub(super) fn run_flutter_event_loop(
                 // old-geometry frame instead of treating normal scheduler
                 // ownership as a fatal reconfiguration error.
                 ready_output_apply = Some((request, connectors));
-                submit_ready_frames(&mut scheduler, swapchain, scanouts, &mut events)?;
+                submit_ready_frames(
+                    flutter
+                        .as_ref()
+                        .ok_or("Flutter runtime disappeared before frame submission")?,
+                    &mut scheduler,
+                    swapchain,
+                    scanouts,
+                    &mut events,
+                )?;
                 let now = Instant::now();
                 let timeout = deadline.map_or(Duration::from_millis(50), |deadline| {
                     Duration::from_millis(50).min(deadline.saturating_duration_since(now))
@@ -1124,7 +1106,7 @@ pub(super) fn run_flutter_event_loop(
                 frame_number: raster_frames,
                 event_loop,
                 events: &mut events,
-                flutter: &mut flutter,
+                flutter,
                 flutter_launcher: Some(flutter_launcher),
             });
             if let Err(error) = apply {
@@ -1140,6 +1122,22 @@ pub(super) fn run_flutter_event_loop(
                     )
                     .into());
                 }
+                // Rollback can restart Flutter on the retained old pools. Its
+                // broker and fences belong to a new generation, so the old
+                // scheduler must not feed it completion events.
+                retired_output_flips =
+                    retired_output_flips.saturating_add(scheduler.presented_frames());
+                scheduler = output_scheduler::OutputScheduler::new(
+                    drm,
+                    volition_event_sender.clone(),
+                    scanouts,
+                    swapchain
+                        .outputs()
+                        .ok_or("rollback lost its physical output pools")?,
+                    flutter.as_mut().unwrap(),
+                    &mut events,
+                )?;
+                frame_scheduler = frame_scheduler::FrameScheduler::new(scanouts, Instant::now());
                 warn!(%message, "rejected output-control transaction");
                 continue;
             }
@@ -1330,7 +1328,15 @@ pub(super) fn run_flutter_event_loop(
                     // common rollback point used by the hotplug transaction.
                     // A signalled ready fence can enter Volition lookahead;
                     // an unfinished one will wake this loop through calloop.
-                    submit_ready_frames(&mut scheduler, swapchain, scanouts, &mut events)?;
+                    submit_ready_frames(
+                        flutter
+                            .as_ref()
+                            .ok_or("Flutter runtime disappeared before frame submission")?,
+                        &mut scheduler,
+                        swapchain,
+                        scanouts,
+                        &mut events,
+                    )?;
                     events.topology_dirty = true;
                     events.kms_reconfigure_requested = kms_reconfigure_requested;
                     events.resident_geometry_reconfigure_requested =
@@ -1383,7 +1389,7 @@ pub(super) fn run_flutter_event_loop(
                     frame_number: raster_frames,
                     event_loop,
                     events: &mut events,
-                    flutter: &mut flutter,
+                    flutter,
                     flutter_launcher: Some(flutter_launcher),
                 });
                 if let Err(error) = topology_apply {
@@ -1446,12 +1452,26 @@ pub(super) fn run_flutter_event_loop(
                 true,
                 "Flutter runtime is refreshing",
             )?;
-            if scheduler.has_pending_scanout_work() {
+            let scanout_work_pending = scheduler.has_pending_scanout_work();
+            let resident_targets_idle = flutter.as_ref().is_some_and(|runtime| {
+                scanouts
+                    .iter()
+                    .all(|scanout| runtime.output_target_available(scanout.output.id))
+            });
+            if scanout_work_pending || !resident_targets_idle {
                 // Stop servicing the producer while its last output batch reaches
                 // every affected CRTC. A ready fence or page flip will wake
                 // this loop through calloop, without disturbing clients or
                 // the graphical session.
-                submit_ready_frames(&mut scheduler, swapchain, scanouts, &mut events)?;
+                submit_ready_frames(
+                    flutter
+                        .as_ref()
+                        .ok_or("Flutter runtime disappeared before frame submission")?,
+                    &mut scheduler,
+                    swapchain,
+                    scanouts,
+                    &mut events,
+                )?;
                 let now = Instant::now();
                 let timeout = deadline.map_or(Duration::from_millis(50), |deadline| {
                     Duration::from_millis(50).min(deadline.saturating_duration_since(now))
@@ -1461,35 +1481,46 @@ pub(super) fn run_flutter_event_loop(
             }
 
             scheduler.prepare_reconfiguration(scanouts, &mut events)?;
-            retired_output_flips =
-                retired_output_flips.saturating_add(scheduler.presented_frames());
-            reload_flutter_runtime(
+            let reload = reload_flutter_runtime(
                 renderer,
                 swapchain,
                 scanouts,
                 topology,
                 &mut events,
-                &mut flutter,
+                flutter,
                 flutter_launcher,
             )?;
-            scheduler = output_scheduler::OutputScheduler::new(
-                drm,
-                volition_event_sender.clone(),
-                scanouts,
-                swapchain
-                    .outputs()
-                    .ok_or("output scheduler has no physical output pools")?,
-                flutter
-                    .as_mut()
-                    .ok_or("Flutter runtime was not restarted after bundle refresh")?,
-                &mut events,
-            )?;
-            frame_scheduler = frame_scheduler::FrameScheduler::new(scanouts, Instant::now());
             events.flutter_reload_requested = false;
-            info!(
-                generation = flutter_launcher.generation,
-                "refreshed Flutter bundle without restarting the compositor session"
-            );
+            match reload {
+                FlutterReloadOutcome::Replaced => {
+                    retired_output_flips =
+                        retired_output_flips.saturating_add(scheduler.presented_frames());
+                    scheduler = output_scheduler::OutputScheduler::new(
+                        drm,
+                        volition_event_sender.clone(),
+                        scanouts,
+                        swapchain
+                            .outputs()
+                            .ok_or("output scheduler has no physical output pools")?,
+                        flutter
+                            .as_mut()
+                            .ok_or("Flutter runtime was not restarted after bundle refresh")?,
+                        &mut events,
+                    )?;
+                    frame_scheduler =
+                        frame_scheduler::FrameScheduler::new(scanouts, Instant::now());
+                    info!(
+                        generation = flutter_launcher.generation,
+                        "refreshed Flutter bundle without restarting the compositor session"
+                    );
+                }
+                FlutterReloadOutcome::Retained => {
+                    info!(
+                        generation = flutter_launcher.generation,
+                        "retained the active Flutter bundle after refresh preflight rejection"
+                    );
+                }
+            }
             continue;
         }
 
@@ -1507,6 +1538,11 @@ pub(super) fn run_flutter_event_loop(
             .len()
             .min(MAX_FLUTTER_EVENTS_PER_ITERATION);
         runtime.process_events(events.flutter_events.drain(..flutter_event_batch))?;
+        // Close/focus/configure are interactive commands, not periodic service
+        // work. Drain them before a spent background slice can defer them;
+        // otherwise busy frames can indefinitely postpone an app's close.
+        synchronize_authentication_boundary(&mut events);
+        synchronize_flutter_window_commands(runtime, &mut events)?;
         if background_started.elapsed() >= COMPOSITOR_BACKGROUND_SLICE {
             event_loop.dispatch(Duration::ZERO, &mut events)?;
             continue;
@@ -1517,7 +1553,6 @@ pub(super) fn run_flutter_event_loop(
             }
             synchronize_idle_dpms_configuration(runtime, &mut events);
         }
-        synchronize_authentication_boundary(&mut events);
         if background_services_due {
             synchronize_requested_dpms_off(runtime, scanouts, &mut events);
         }
@@ -1713,6 +1748,9 @@ pub(super) fn run_flutter_event_loop(
         next_dispatch_timeout = events
             .dpms_topology
             .limit_dispatch_timeout(now, next_dispatch_timeout);
+        if events.fingerprint.active() {
+            next_dispatch_timeout = next_dispatch_timeout.min(Duration::from_millis(20));
+        }
         if drm.is_active() {
             next_dispatch_timeout =
                 scheduler.limit_presentation_watchdog_timeout(now, next_dispatch_timeout);

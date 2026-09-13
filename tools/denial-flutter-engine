@@ -35,6 +35,17 @@ fail() {
   exit 1
 }
 
+install_legacy_denial_environment_aliases() {
+  local canonical
+  local legacy
+  while IFS= read -r canonical; do
+    [[ -n "$canonical" ]] || continue
+    legacy="DENIA_${canonical#DENIAL_}"
+    printf -v "$legacy" '%s' "${!canonical}"
+    export "$legacy"
+  done < <(compgen -e -- DENIAL_)
+}
+
 if [[ "${DENIAL_PROMOTION_MODE:-0}" == 1 ]]; then
   fail 'build commands are disabled during signed-tag promotion'
 fi
@@ -1081,6 +1092,8 @@ main() {
   local command_name="${1:-}"
   local github_env=''
   local -a command_args=()
+
+  install_legacy_denial_environment_aliases
 
   for command in \
     awk chmod cmp flock git install jq mktemp mv ninja nm readlink rm sha1sum sha256sum stat; do

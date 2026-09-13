@@ -89,7 +89,7 @@ class _DesktopHomeWidget extends StatelessWidget {
       child: HomeGridItemCard(
         item: item,
         launchEnabled: false,
-        onLaunch: (_) {},
+        onLaunch: (_, _) {},
       ),
     );
     return RepaintBoundary(
@@ -248,6 +248,16 @@ class _DesktopPopupSurfaceLayers extends StatelessWidget {
         final placement = followsLivePlacement
             ? selectedPlacement
             : this.placement;
+        final outputPixelGrid = ref.watch(
+          displayLayoutProvider.select(
+            (layout) =>
+                desktopOutputPixelGridForMonitor(layout, placement.monitorId),
+          ),
+        );
+        final devicePixelRatio =
+            outputPixelGrid?.scale ?? MediaQuery.devicePixelRatioOf(context);
+        final pixelGridOrigin =
+            outputPixelGrid?.logicalRect.topLeft ?? Offset.zero;
         final liveFrame = followsLivePlacement
             ? desktopLivePlacementVisualFrame(
                 visualFrame: this.frame,
@@ -259,7 +269,8 @@ class _DesktopPopupSurfaceLayers extends StatelessWidget {
         final frame = desktopPixelAlignedWindowFrame(
           frame: liveFrame,
           contentInset: placement.frameBorder,
-          devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+          devicePixelRatio: devicePixelRatio,
+          pixelGridOrigin: pixelGridOrigin,
           enabled: !transformed,
           alignSize: true,
         );
@@ -292,7 +303,12 @@ class _DesktopPopupSurfaceLayers extends StatelessWidget {
               curve: minimized
                   ? Motion.md3EmphasizedAccelerate
                   : Motion.md3EmphasizedDecelerate,
-              opacity: minimized ? 0.0 : 1.0,
+              opacity: desktopWindowPresentationOpacity(
+                transparencyMode: ShellTheme.of(context).transparencyMode,
+                minimized: minimized,
+                desktopWidget: false,
+                windowOpacity: 1.0,
+              ),
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
@@ -312,6 +328,8 @@ class _DesktopPopupSurfaceLayers extends StatelessWidget {
                         dragging: placement.dragging,
                         layoutPreviewing: placement.layoutPreviewing,
                         pixelAlignmentInset: 0.0,
+                        pixelGridScale: devicePixelRatio,
+                        pixelGridOrigin: pixelGridOrigin,
                         alignSizeToDevicePixels: true,
                         child: ShellBackdropBlur(
                           blur: !layer.opaque || layer.opacity < 1.0,
@@ -320,6 +338,8 @@ class _DesktopPopupSurfaceLayers extends StatelessWidget {
                           child: SurfaceLayerTexture(
                             layer: layer,
                             filterQuality: filterQuality,
+                            presentationScale: devicePixelRatio,
+                            pixelGridOrigin: pixelGridOrigin,
                           ),
                         ),
                       ),

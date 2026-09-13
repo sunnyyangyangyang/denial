@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
 import '../theme/motion.dart';
@@ -19,6 +20,7 @@ class DesktopOverviewPreviewInteraction extends StatefulWidget {
     required this.dragging,
     required this.label,
     required this.onTap,
+    required this.onClose,
     required this.onDragStart,
     required this.onDragUpdate,
     required this.onDragEnd,
@@ -32,6 +34,7 @@ class DesktopOverviewPreviewInteraction extends StatefulWidget {
   final bool dragging;
   final String label;
   final VoidCallback onTap;
+  final VoidCallback onClose;
   final VoidCallback onDragStart;
   final ValueChanged<Offset> onDragUpdate;
   final VoidCallback onDragEnd;
@@ -92,6 +95,14 @@ class _DesktopOverviewPreviewInteractionState
     widget.onDragCancel();
   }
 
+  void _handlePointerDown(PointerDownEvent event) {
+    if (widget.overviewActive &&
+        widget.overview &&
+        event.buttons == kMiddleMouseButton) {
+      widget.onClose();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final hovered =
@@ -108,24 +119,27 @@ class _DesktopOverviewPreviewInteractionState
         cursor: interactive ? ShellMouseCursors.link : ShellMouseCursors.normal,
         onEnter: interactive ? (_) => _setHovered(true) : null,
         onExit: interactive ? (_) => _setHovered(false) : null,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: interactive ? widget.onTap : null,
-          onPanStart: widget.overview ? _startDrag : null,
-          onPanUpdate: widget.overview ? _updateDrag : null,
-          onPanEnd: widget.overview ? (_) => _endDrag() : null,
-          onPanCancel: widget.overview ? _cancelDrag : null,
-          child: AnimatedScale(
-            duration: Motion.tile,
-            curve: hovered
-                ? Motion.md3EmphasizedDecelerate
-                : Motion.md3EmphasizedAccelerate,
-            scale: hovered
-                ? widget.desktopWidget
-                      ? 1.018
-                      : _hoverScale
-                : 1.0,
-            child: widget.child,
+        child: Listener(
+          onPointerDown: _handlePointerDown,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: interactive ? widget.onTap : null,
+            onPanStart: widget.overview ? _startDrag : null,
+            onPanUpdate: widget.overview ? _updateDrag : null,
+            onPanEnd: widget.overview ? (_) => _endDrag() : null,
+            onPanCancel: widget.overview ? _cancelDrag : null,
+            child: AnimatedScale(
+              duration: Motion.tile,
+              curve: hovered
+                  ? Motion.md3EmphasizedDecelerate
+                  : Motion.md3EmphasizedAccelerate,
+              scale: hovered
+                  ? widget.desktopWidget
+                        ? 1.018
+                        : _hoverScale
+                  : 1.0,
+              child: widget.child,
+            ),
           ),
         ),
       ),

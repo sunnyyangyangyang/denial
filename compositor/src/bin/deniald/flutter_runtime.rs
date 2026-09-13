@@ -50,10 +50,13 @@ use tracing::{debug, error, info, warn};
 use super::egl_context;
 use super::frame_scheduler::{OutputFrameRequest, PendingFrame};
 use super::idle_policy;
-use super::native_app_plugin::NativeBufferRelease;
 use super::render_audit_enabled;
 use super::wire::{self, WireBridge};
 
+#[path = "flutter_runtime/fingerprint_scene.rs"]
+mod fingerprint_scene;
+#[path = "flutter_runtime/lock_frame.rs"]
+mod lock_frame;
 #[path = "flutter_runtime/mouse_cursor.rs"]
 mod mouse_cursor;
 #[path = "flutter_runtime/platform.rs"]
@@ -71,6 +74,7 @@ mod cursor_bridge;
 mod damage;
 #[path = "flutter_runtime/engine_session.rs"]
 mod engine_session;
+pub(crate) use engine_session::PreparedFlutterRenderer;
 #[path = "flutter_runtime/event_pipeline.rs"]
 mod event_pipeline;
 #[path = "flutter_runtime/input.rs"]
@@ -484,6 +488,8 @@ pub struct FlutterRuntime {
     frame_interval: Duration,
     kms_frame_clock_enabled: bool,
     outputs_visible: Option<bool>,
+    lock_frame_gate: lock_frame::LockFrameGate,
+    fingerprint_scene: fingerprint_scene::FingerprintScene,
     published_text_input_state: Option<(bool, bool, bool, u32, u32, u64)>,
     frame_ready_observed: bool,
     last_pointer_timestamp_micros: usize,

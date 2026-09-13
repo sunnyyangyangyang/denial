@@ -40,6 +40,15 @@ final wallpaperStoreProvider = Provider<WallpaperStore>((ref) {
   return WallpaperStore(ref.watch(runtimePathsProvider));
 });
 
+/// A persisted assignment resolved before the production widget tree mounts.
+///
+/// Tests and embedders which do not preload it retain the asynchronous restore
+/// path. The stock shell overrides this so neither its scene nor its accent
+/// extractor can observe the default wallpaper before a saved custom one.
+final initialWallpaperAssignmentProvider = Provider<WallpaperAssignment?>(
+  (ref) => null,
+);
+
 final wallpaperControllerProvider =
     NotifierProvider<WallpaperController, WallpaperExperienceState>(
       WallpaperController.new,
@@ -64,9 +73,9 @@ class WallpaperExperienceState {
     required this.error,
   });
 
-  factory WallpaperExperienceState.initial() {
+  factory WallpaperExperienceState.initial({WallpaperAssignment? assignment}) {
     return WallpaperExperienceState(
-      assignment: WallpaperAssignment.initial(),
+      assignment: assignment ?? WallpaperAssignment.initial(),
       outgoingAssignment: null,
       target: const WallpaperTarget.all(),
       transitionTarget: const WallpaperTarget.all(),
@@ -163,6 +172,7 @@ class WallpaperController extends Notifier<WallpaperExperienceState>
     _searchGeneration = 0;
     _assignmentGeneration = 0;
     _buildGeneration = beginBuildGeneration();
+    final initialAssignment = ref.watch(initialWallpaperAssignmentProvider);
     final generation = _buildGeneration;
     ref.onDispose(() {
       _searchTimer?.cancel();
@@ -174,11 +184,13 @@ class WallpaperController extends Notifier<WallpaperExperienceState>
     });
     scheduleMicrotask(() {
       if (isBuildGenerationActive(generation)) {
-        unawaited(_restore(generation));
+        if (initialAssignment == null) {
+          unawaited(_restore(generation));
+        }
         unawaited(_watchStore(generation));
       }
     });
-    return WallpaperExperienceState.initial();
+    return WallpaperExperienceState.initial(assignment: initialAssignment);
   }
 
   static const Duration _searchDebounce = Duration(milliseconds: 360);

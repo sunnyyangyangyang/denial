@@ -136,6 +136,8 @@ class DenialWindow {
     required this.geometryWidth,
     required this.geometryHeight,
     required this.monitorId,
+    this.workspaceId = 1,
+    this.minimized = false,
     required this.transform,
     required this.scale120,
     this.pinned = false,
@@ -175,6 +177,8 @@ class DenialWindow {
   final double geometryWidth;
   final double geometryHeight;
   final int monitorId;
+  final int workspaceId;
+  final bool minimized;
   final int transform;
   final int scale120;
   final bool pinned;
@@ -229,6 +233,16 @@ class DenialWindow {
     return Rect.fromLTWH(surfaceX, surfaceY, fallbackWidth, fallbackHeight);
   }
 
+  /// Native frame bounds include any compositor-owned system-bar strip.
+  Rect get presentationCoordinateRect => surfaceWidth > 0 && surfaceHeight > 0
+      ? Rect.fromLTWH(surfaceX, surfaceY, surfaceWidth, surfaceHeight)
+      : contentCoordinateRect;
+
+  double get nativeInsetTop =>
+      (contentCoordinateRect.top - presentationCoordinateRect.top)
+          .clamp(0.0, presentationCoordinateRect.height)
+          .toDouble();
+
   Iterable<DenialSurfaceLayer> get mainSurfaceLayers =>
       surfaceLayers.where((layer) => !layer.belongsToPopup);
 
@@ -282,7 +296,7 @@ class DenialWindow {
   }
 
   Rect mapSurfaceRect(DenialSurfaceLayer layer, Rect targetContentRect) {
-    final source = contentCoordinateRect;
+    final source = presentationCoordinateRect;
     if (source.width <= 0.0 ||
         source.height <= 0.0 ||
         targetContentRect.width <= 0.0 ||
@@ -323,6 +337,8 @@ class DenialWindow {
         other.windowId == windowId &&
         other.appId == appId &&
         other.monitorId == monitorId &&
+        other.workspaceId == workspaceId &&
+        other.minimized == minimized &&
         other.pinned == pinned &&
         other.suppressAnimations == suppressAnimations &&
         other.restoredAcrossFlutterRestart == restoredAcrossFlutterRestart &&
@@ -357,6 +373,8 @@ class DenialWindow {
         other.geometryWidth == geometryWidth &&
         other.geometryHeight == geometryHeight &&
         other.monitorId == monitorId &&
+        other.workspaceId == workspaceId &&
+        other.minimized == minimized &&
         other.transform == transform &&
         other.scale120 == scale120 &&
         other.pinned == pinned &&
@@ -404,6 +422,8 @@ class DenialWindow {
     geometryWidth,
     geometryHeight,
     monitorId,
+    workspaceId,
+    minimized,
     transform,
     scale120,
     pinned,

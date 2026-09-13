@@ -388,8 +388,16 @@ impl FlutterRuntime {
             return Ok(false);
         }
 
-        self.handler
-            .authorize_outputs(requests, &mut self.render_view_scratch);
+        let mut tagged_requests = requests.to_vec();
+        for request in &mut tagged_requests {
+            request.fingerprint_epoch = self.fingerprint_scene.render_epoch(request.tick.output);
+        }
+        self.handler.authorize_outputs(
+            &tagged_requests,
+            &mut self.render_view_scratch,
+            self.lock_frame_gate
+                .render_token(self.authentication.locked_epoch()),
+        );
         if self.render_view_scratch.is_empty() {
             return Ok(false);
         }

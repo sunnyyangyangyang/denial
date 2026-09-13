@@ -94,6 +94,7 @@ use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::tablet_manager::{TabletManagerState, TabletSeatHandler};
 use smithay::wayland::viewporter::ViewporterState;
+use smithay::wayland::alpha_modifier::{AlphaModifierState, AlphaModifierSurfaceCachedState};
 use smithay::wayland::xwayland_shell::XWaylandShellState;
 use smithay::wayland::xwayland_keyboard_grab::XWaylandKeyboardGrabState;
 use smithay::wayland::xdg_activation::XdgActivationState;
@@ -133,6 +134,9 @@ mod clipboard_io;
 mod cursor_state;
 #[path = "wayland_frontend/focus.rs"]
 mod focus;
+#[cfg(feature = "flutter")]
+#[path = "wayland_frontend/frame_timeline.rs"]
+mod frame_timeline;
 #[path = "wayland_frontend/handlers.rs"]
 mod handlers;
 #[cfg(feature = "flutter")]
@@ -142,6 +146,9 @@ mod idle_inhibit;
 mod input;
 #[path = "wayland_frontend/input_method.rs"]
 pub(super) mod input_method;
+#[cfg(feature = "flutter")]
+#[path = "wayland_frontend/insets.rs"]
+mod insets;
 #[cfg(feature = "flutter")]
 pub(super) use input::{dispatch_shell_keyboard, reconcile_flutter_pointer_route};
 #[path = "wayland_frontend/input_source.rs"]
@@ -176,8 +183,14 @@ mod touch_gestures;
 mod window_layout_adapter;
 #[path = "wayland_frontend/window_management.rs"]
 mod window_management;
+#[cfg(feature = "flutter")]
+#[path = "wayland_frontend/window_outputs.rs"]
+mod window_outputs;
 #[path = "wayland_frontend/window_state.rs"]
 mod window_state;
+#[cfg(feature = "flutter")]
+#[path = "wayland_frontend/workspace.rs"]
+mod workspace;
 #[path = "wayland_frontend/xwayland.rs"]
 mod xwayland;
 
@@ -364,6 +377,7 @@ pub(super) struct WaylandFrontend {
     pub _relative_pointer_manager_state: RelativePointerManagerState,
     pub _pointer_constraints_state: PointerConstraintsState,
     _viewporter_state: ViewporterState,
+    _alpha_modifier_state: AlphaModifierState,
     _fractional_scale_manager_state: FractionalScaleManagerState,
     pub xwm: Option<X11Wm>,
     #[cfg(feature = "flutter")]
@@ -450,6 +464,8 @@ pub(super) struct WaylandFrontend {
     #[cfg(feature = "flutter")]
     shell_fullscreen_locks: HashSet<ObjectId>,
     #[cfg(feature = "flutter")]
+    pinned_windows: HashSet<u64>,
+    #[cfg(feature = "flutter")]
     visible_window_ids: HashSet<u64>,
     #[cfg(feature = "flutter")]
     input_root_ids: HashMap<ObjectId, u64>,
@@ -535,6 +551,20 @@ pub(super) struct WaylandFrontend {
     retired_input_method_keys: HashSet<u32>,
     #[cfg(feature = "flutter")]
     minimized_windows: HashSet<ObjectId>,
+    #[cfg(feature = "flutter")]
+    minimized_local_windows: HashSet<u64>,
+    #[cfg(feature = "flutter")]
+    workspaces_enabled: bool,
+    #[cfg(feature = "flutter")]
+    workspace_count: u8,
+    #[cfg(feature = "flutter")]
+    active_workspaces: HashMap<OutputId, u8>,
+    #[cfg(feature = "flutter")]
+    window_workspaces: HashMap<u64, workspace::WorkspaceLocation>,
+    #[cfg(feature = "flutter")]
+    minimized_window_outputs: HashMap<u64, OutputId>,
+    #[cfg(feature = "flutter")]
+    workspace_focus_history: HashMap<(OutputId, u8), u64>,
     window_placements: WindowPlacementStore,
     restored_window_positions: HashSet<ObjectId>,
     client_geometry_state_requests: HashSet<ObjectId>,
@@ -550,6 +580,10 @@ pub(super) struct WaylandFrontend {
     pub(super) active_keyboard_layout: usize,
     pub(super) keyboard_configuration_changed: bool,
     presentation: presentation::PresentationTracker,
+    #[cfg(feature = "flutter")]
+    frame_timeline: frame_timeline::FrameTimelineManager,
+    #[cfg(feature = "flutter")]
+    mobile_shell: bool,
     #[cfg(feature = "flutter")]
     idle_inhibitors: IdleInhibitors,
     #[cfg(feature = "flutter")]
@@ -623,10 +657,6 @@ struct WaylandOutput {
     capture_source: Rectangle<i32, Physical>,
     capture_size: Size<i32, Physical>,
     powered: bool,
-    #[cfg(feature = "flutter")]
-    presentation_batch: presentation::OutputPresentationBatch,
-    #[cfg(feature = "flutter")]
-    submitted_this_batch: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -826,13 +856,14 @@ fn init_listener(
                 warn!("discarding Wayland connection without frontend state");
                 return;
             };
-            let Some(client_state) = client_budget.try_reserve_client() else {
+            let Some(mut client_state) = client_budget.try_reserve_client() else {
                 warn!(
                     limit = MAX_WAYLAND_CLIENTS,
                     "discarding Wayland connection because the client budget is exhausted"
                 );
                 return;
             };
+            client_state.peer_uid = socket_peer_uid(&client_stream);
             if let Err(error) = frontend
                 .display_handle
                 .insert_client(client_stream, Arc::new(client_state))
@@ -874,3 +905,44 @@ fn transform_to_wire(transform: Transform) -> u32 {
 }
 
 smithay::delegate_dispatch2!(RuntimeState);
+
+// Cache peer identity before inserting the socket. Global visibility callbacks
+// run under the Wayland backend lock and must never re-enter it for credentials.
+fn socket_peer_uid(stream: &std::os::unix::net::UnixStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let mut credentials = std::mem::MaybeUninit::<libc::ucred>::uninit();
+    let mut size = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: getsockopt writes at most size bytes to a correctly sized ucred.
+    let status = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            credentials.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if status != 0 || size as usize != std::mem::size_of::<libc::ucred>() {
+        return None;
+    }
+    // SAFETY: the successful call initialized the complete structure.
+    Some(unsafe { credentials.assume_init() }.uid)
+}
+
+#[cfg(feature = "flutter")]
+pub(super) fn is_root_client(client: &Client) -> bool {
+    client
+        .get_data::<handlers::DenialClientState>()
+        .is_some_and(|state| state.peer_uid == Some(0))
+}
+
+#[cfg(all(test, feature = "flutter"))]
+pub(super) fn fingerprint_test_client(uid: Option<u32>) -> Arc<dyn ClientData> {
+    let mut data = handlers::DenialClientState::default();
+    data.peer_uid = uid;
+    Arc::new(data)
+}
+
+#[cfg(feature = "flutter")]
+#[path = "wayland_frontend/wake_gesture.rs"]
+mod wake_gesture;

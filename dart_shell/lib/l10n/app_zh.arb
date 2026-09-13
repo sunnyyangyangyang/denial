@@ -1,5 +1,6 @@
 {
   "@@locale": "zh",
+  "homeResizeWidget": "调整小组件大小",
   "actionCancel": "取消",
   "actionDismiss": "关闭",
   "screenshotSelectionHint": "拖动以选择区域 · 按 Esc 取消",
@@ -448,6 +449,26 @@
   "settingsBackdropBlurLevelGood": "良好",
   "settingsBackdropBlurLevelBest": "最佳",
   "settingsBackdropBlurOpacityThreshold": "模糊的最低像素不透明度",
+  "settingsGlassAppearance": "玻璃外观",
+  "settingsGlassTransparency": "所有玻璃表面的透明度",
+  "settingsTransparencyTitle": "透明材质",
+  "settingsTransparencyOff": "关闭",
+  "settingsTransparencyBlur": "模糊",
+  "settingsTransparencyGlass": "玻璃",
+  "settingsTransparencyOffDescription": "透明表面不处理其后的桌面内容。",
+  "settingsTransparencyBlurDescription": "使用 Denial 当前的快速高斯背景模糊。",
+  "settingsTransparencyGlassDescription": "通过磨砂、强调色染色的透镜折射清晰桌面，并添加定向边缘光。",
+  "settingsGlassFrost": "磨砂",
+  "settingsGlassQuality": "渲染质量",
+  "settingsGlassThickness": "光学厚度",
+  "settingsGlassRefraction": "折射",
+  "settingsGlassDispersion": "色散",
+  "settingsGlassSaturation": "饱和度",
+  "settingsGlassAccentTint": "强调色染色",
+  "settingsGlassBrightness": "明度",
+  "settingsGlassLightAngle": "光照方向",
+  "settingsGlassLightIntensity": "光照强度",
+  "settingsGlassEdgeStrength": "边缘高光",
   "settingsBackdropDimming": "背景变暗",
   "settingsBarGeometryDescription": "调整桌面系统栏预留的空间。",
   "settingsBarGeometryTitle": "系统栏尺寸",
@@ -526,6 +547,9 @@
   "settingsDisplayRotation180": "倒置",
   "settingsDisplayRotation270": "逆时针 90°",
   "settingsDisplayScale": "缩放",
+  "settingsDisplayScaleInvalid": "请输入 50 到 600 之间的数值。",
+  "settingsDisplayScalePreset": "预设",
+  "settingsDisplayScaleRange": "输入 50–600%。数值会舍入到最接近的受支持缩放比例。低于 100% 时画面可能较柔和。",
   "settingsDisplayVariableRefreshRate": "可变刷新率 (VRR)",
   "settingsDisplayVariableRefreshRateDescription": "使此显示器的刷新率与渲染内容相匹配。",
   "settingsDisplayZoomFit": "适应所有显示器",
@@ -639,6 +663,13 @@
   "settingsShortcutGestureThreeFingerSwipeUp": "三指向上轻扫",
   "settingsShortcutGestureThreeFingerSwipeLeft": "三指向左轻扫",
   "settingsShortcutGestureThreeFingerSwipeRight": "三指向右轻扫",
+  "settingsShortcutGestureFourFingerSwipeLeft": "四指向左轻扫",
+  "settingsShortcutGestureFourFingerSwipeRight": "四指向右轻扫",
+  "settingsShortcutGestureFourFingerSwipeUp": "四指向上轻扫",
+  "settingsShortcutGestureFourFingerSwipeDown": "四指向下轻扫",
+  "settingsWorkspaceSwitchingOrientation": "切换方向",
+  "settingsWorkspaceSwitchingHorizontal": "水平",
+  "settingsWorkspaceSwitchingVertical": "垂直",
   "settingsShortcutInputCategoryModifier": "修饰键",
   "settingsShortcutInputCategoryNavigation": "导航",
   "settingsShortcutInputCategoryEditing": "编辑",
@@ -662,6 +693,7 @@
   "settingsShortcutActionMinimizeAllWindows": "最小化所有窗口",
   "settingsShortcutActionToggleMaximize": "最大化或还原",
   "settingsShortcutActionToggleFullscreen": "进入或退出全屏",
+  "settingsShortcutActionToggleWindowAlwaysOnTop": "置顶或取消置顶窗口",
   "settingsShortcutActionReleasePointer": "释放指针",
   "settingsShortcutActionLockScreen": "锁定屏幕",
   "settingsShortcutActionVolumeUp": "增大音量",
@@ -682,9 +714,10 @@
   "settingsLayoutDescription": "控制普通窗口和最大化窗口周围的预留间距。",
   "settingsLayoutSection": "桌面布局",
   "settingsLayoutTitle": "给每个窗口留出呼吸空间。",
-  "settingsWindowLayoutDescription": "堆叠允许窗口自由移动和重叠。平铺使用动态二叉树排列窗口，并让临时窗口保持浮动。",
+  "settingsWindowLayoutDescription": "堆叠允许窗口相互重叠。平铺动态划分桌面。滚动平铺将全高窗口列排列成跟随焦点的水平长带。",
   "settingsWindowLayoutDwindle": "平铺",
   "settingsWindowLayoutStacking": "堆叠",
+  "settingsWindowLayoutScrolling": "滚动平铺",
   "settingsWindowLayoutTitle": "窗口布局",
   "settingsLiveBadge": "实时",
   "settingsLiveChangesSemanticsLabel": "更改会实时应用",
@@ -843,6 +876,12 @@
   "settingsPowerDescription": "控制显示器超时行为和空闲抑制。",
   "settingsPowerSection": "电源",
   "settingsPowerTitle": "尊重工作流程的电源管理。",
+  "settingsSuspendMode": "挂起模式",
+  "settingsSuspendModeDescription": "选择 Linux 在挂起时如何保持内存供电。Denial 活动期间的每次挂起都会使用此设置。",
+  "settingsSuspendModeS2idle": "挂起到空闲（s2idle）",
+  "settingsSuspendModeShallow": "待机（shallow）",
+  "settingsSuspendModeDeep": "挂起到内存（deep）",
+  "settingsSuspendModeUnavailable": "不可用",
   "settingsRefresh": "刷新",
   "settingsResetPage": "重置页面",
   "settingsScan": "扫描",
@@ -1003,5 +1042,101 @@
   "wifiWepRequirements": "WEP 密钥必须包含 5 到 64 个字符。",
   "windowSwitcherPosition": "{position} / {total}",
   "windowSwitcherSelected": "已选择 {windowTitle}",
-  "windowUntitled": "窗口 {windowId}"
+  "windowUntitled": "窗口 {windowId}",
+  "settingsGlassAdvanced": "玻璃效果调节",
+  "settingsGlassReset": "重置玻璃效果",
+  "settingsGlassTuningDescription": "更改会立即生效。默认值保留原有的玻璃效果。",
+  "settingsGlassBevelWidth": "斜边宽度",
+  "settingsGlassRefractionDepth": "折射深度",
+  "settingsGlassRimWidth": "高光宽度",
+  "settingsGlassRimFalloff": "高光衰减",
+  "settingsGlassOppositeLight": "对侧边缘光照",
+  "settingsGlassRimPixels": "{width} 像素",
+  "lockFingerprintNotRecognized": "未识别指纹",
+  "fingerprintSection": "指纹",
+  "fingerprintPasswordPrompt": "请输入 sudo 密码以管理指纹。",
+  "fingerprintSudoPassword": "sudo 密码",
+  "fingerprintContinue": "继续",
+  "fingerprintDescription": "使用已录入的指纹解锁 Denial。",
+  "fingerprintEmptyTitle": "尚未录入指纹",
+  "fingerprintEmptyDescription": "在下方选择手指，录入第一个指纹。",
+  "fingerprintChooseFinger": "要录入的手指",
+  "fingerprintEnroll": "录入指纹",
+  "fingerprintAdd": "添加指纹",
+  "fingerprintAuthenticationFailed": "密码验证失败，请重试。",
+  "fingerprintExpired": "请重新输入密码以继续。",
+  "fingerprintPreparing": "正在准备指纹读取器…",
+  "fingerprintTouchSensor": "用所选手指触碰传感器，然后抬起。",
+  "fingerprintEnrolled": "指纹已录入，现在可以用它解锁 Denial。",
+  "fingerprintCancelled": "已取消录入。",
+  "fingerprintDuplicate": "此指纹已录入，请选择另一根手指。",
+  "fingerprintRetry": "抬起手指，调整位置后再次触碰传感器。",
+  "fingerprintUnavailable": "无法完成指纹管理，请检查读取器后重试。",
+  "fingerprintProgress": "已完成 {completed}/{total} 次扫描",
+  "fingerprintLeftThumb": "左拇指",
+  "fingerprintLeftIndex": "左食指",
+  "fingerprintLeftMiddle": "左中指",
+  "fingerprintLeftRing": "左无名指",
+  "fingerprintLeftLittle": "左小指",
+  "fingerprintRightThumb": "右拇指",
+  "fingerprintRightIndex": "右食指",
+  "fingerprintRightMiddle": "右中指",
+  "fingerprintRightRing": "右无名指",
+  "fingerprintRightLittle": "右小指",
+  "mobileData": "移动数据",
+  "mobileConnected": "已连接",
+  "mobileDisconnected": "未连接",
+  "mobileUnavailable": "移动网络不可用",
+  "mobileChangeFailed": "无法更改移动数据",
+  "simPinTitle": "解锁 SIM 卡",
+  "simPinLabel": "SIM PIN",
+  "simPinUnlock": "解锁 SIM 卡",
+  "simPinLater": "稍后",
+  "simPinFailed": "无法解锁 SIM 卡。请检查 PIN 和剩余尝试次数。",
+  "simPukRequired": "SIM 卡需要 PUK。请联系运营商。",
+  "simLocked": "SIM 卡已锁定",
+  "simPinRetries": "剩余 {count} 次尝试",
+  "@simPinRetries": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "@mobileData": {
+    "description": "Mobile connectivity and SIM authentication UI."
+  },
+  "@mobileConnected": {
+    "description": "Mobile connectivity and SIM authentication UI."
+  },
+  "@mobileDisconnected": {
+    "description": "Mobile connectivity and SIM authentication UI."
+  },
+  "@mobileUnavailable": {
+    "description": "Mobile connectivity and SIM authentication UI."
+  },
+  "@mobileChangeFailed": {
+    "description": "Mobile connectivity and SIM authentication UI."
+  },
+  "@simPinTitle": {
+    "description": "Mobile connectivity and SIM authentication UI."
+  },
+  "@simPinLabel": {
+    "description": "Mobile connectivity and SIM authentication UI."
+  },
+  "@simPinUnlock": {
+    "description": "Mobile connectivity and SIM authentication UI."
+  },
+  "@simPinLater": {
+    "description": "Mobile connectivity and SIM authentication UI."
+  },
+  "@simPinFailed": {
+    "description": "Mobile connectivity and SIM authentication UI."
+  },
+  "@simPukRequired": {
+    "description": "Mobile connectivity and SIM authentication UI."
+  },
+  "@simLocked": {
+    "description": "Mobile connectivity and SIM authentication UI."
+  }
 }

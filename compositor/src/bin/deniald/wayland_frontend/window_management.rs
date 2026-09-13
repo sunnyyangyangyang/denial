@@ -202,6 +202,32 @@ pub(super) fn activate_window(
     window: &Window,
     serial: smithay::utils::Serial,
 ) -> bool {
+    #[cfg(feature = "flutter")]
+    {
+        let Some((window_id, minimized)) = state.wayland.as_ref().and_then(|frontend| {
+            let root = frontend.window_root_surface(window)?;
+            Some((
+                frontend.surface_id(&root)?,
+                frontend.minimized_windows.contains(&root.id()),
+            ))
+        }) else {
+            return false;
+        };
+        if minimized {
+            state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .restore_window_workspace(window_id);
+        } else if !state
+            .wayland
+            .as_ref()
+            .expect("missing Wayland frontend")
+            .window_is_on_active_workspace(window_id)
+        {
+            return false;
+        }
+    }
     let (keyboard, keyboard_focus) = {
         let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
         let keyboard = frontend.seat.get_keyboard().expect("seat has no keyboard");
@@ -258,6 +284,11 @@ pub(super) fn activate_window(
     #[cfg(feature = "flutter")]
     if let Some(window_id) = window_id {
         state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .record_workspace_focus(window_id);
+        state
             .pending_window_events
             .push_activation(window_id, resumed);
     }
@@ -282,7 +313,11 @@ pub(super) fn activate_topmost_window(state: &mut RuntimeState) -> bool {
                     .x11_surface()
                     .is_none_or(|x11| !x11.is_override_redirect())
                     && frontend.window_root_surface(candidate).is_some_and(|root| {
-                        root.is_alive() && !frontend.minimized_windows.contains(&root.id())
+                        root.is_alive()
+                            && !frontend.minimized_windows.contains(&root.id())
+                            && frontend
+                                .surface_id(&root)
+                                .is_some_and(|id| frontend.window_is_on_active_workspace(id))
                     })
             })
             .cloned()
@@ -294,8 +329,10 @@ pub(super) fn activate_topmost_window(state: &mut RuntimeState) -> bool {
 pub(in super::super) fn apply_window_commands(
     state: &mut RuntimeState,
     commands: impl IntoIterator<Item = WindowCommand>,
-) {
+) -> Result<(), std::io::Error> {
+    let mut had_commands = false;
     for command in commands {
+        had_commands = true;
         let command = match command {
             WindowCommand::CreateLocal {
                 app_id,
@@ -315,6 +352,22 @@ pub(in super::super) fn apply_window_commands(
                     }
                 };
                 activate_local_flutter_window(state, window_id);
+                continue;
+            }
+            WindowCommand::SwitchWorkspace {
+                monitor_id,
+                workspace_id,
+            } => {
+                switch_monitor_workspace(state, monitor_id, workspace_id);
+                continue;
+            }
+            WindowCommand::MoveToWorkspace {
+                window_id,
+                monitor_id,
+                workspace_id,
+                follow,
+            } => {
+                move_window_to_workspace(state, window_id, monitor_id, workspace_id, follow);
                 continue;
             }
             command => command,
@@ -353,6 +406,9 @@ pub(in super::super) fn apply_window_commands(
                     }
                 }
                 WindowCommand::CreateLocal { .. } => unreachable!(),
+                WindowCommand::SwitchWorkspace { .. } | WindowCommand::MoveToWorkspace { .. } => {
+                    unreachable!()
+                }
             }
             continue;
         }
@@ -429,6 +485,18 @@ pub(in super::super) fn apply_window_commands(
                         state.scene_sync.mark_dirty();
                         continue;
                     }
+                }
+                if state
+                    .wayland
+                    .as_ref()
+                    .is_some_and(|frontend| frontend.mobile_window_geometry(&window).is_some())
+                {
+                    state
+                        .wayland
+                        .as_mut()
+                        .expect("missing Wayland frontend")
+                        .configure_mobile_window(&window);
+                    continue;
                 }
                 let requested_size = Size::<i32, Logical>::from((
                     geometry.width.round() as i32,
@@ -588,21 +656,232 @@ pub(in super::super) fn apply_window_commands(
                 }
                 state.scene_sync.mark_dirty();
             }
-            WindowCommand::CreateLocal { .. } => unreachable!(),
+            WindowCommand::CreateLocal { .. }
+            | WindowCommand::SwitchWorkspace { .. }
+            | WindowCommand::MoveToWorkspace { .. } => unreachable!(),
         }
     }
+    // Shell commands arrive independently of client input and presentation.
+    // In particular, a close sent after its preview leaves the screen must
+    // reach the client even when no further client or output frame is due.
+    if had_commands && let Some(frontend) = state.wayland.as_mut() {
+        frontend.display_handle.flush_clients()?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "flutter")]
+pub(super) fn switch_monitor_workspace(
+    state: &mut RuntimeState,
+    monitor_id: i64,
+    workspace_id: u8,
+) -> bool {
+    let changed = state
+        .wayland
+        .as_mut()
+        .expect("missing Wayland frontend")
+        .switch_workspace(monitor_id, workspace_id);
+    if !changed {
+        return false;
+    }
+
+    let focused = focused_window(state);
+    if let Some(window) = focused {
+        let remains_visible = state.wayland.as_ref().is_some_and(|frontend| {
+            frontend
+                .window_root_surface(&window)
+                .and_then(|root| frontend.surface_id(&root))
+                .is_some_and(|window_id| frontend.window_is_on_active_workspace(window_id))
+        });
+        if !remains_visible {
+            release_window_focus(state, &window);
+        }
+    }
+    if let Some(local) = focused_local_window(state) {
+        let remains_visible = state
+            .wayland
+            .as_ref()
+            .is_some_and(|frontend| frontend.window_is_on_active_workspace(local));
+        if !remains_visible {
+            state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .clear_local_flutter_focus();
+        }
+    }
+    state.queue_workspace_action(monitor_id, workspace_id);
+    let remembered = state
+        .wayland
+        .as_ref()
+        .and_then(|frontend| frontend.remembered_workspace_focus(monitor_id, workspace_id));
+    if let Some(window_id) = remembered {
+        if state
+            .wayland
+            .as_ref()
+            .is_some_and(|frontend| frontend.is_local_flutter_window(window_id))
+        {
+            activate_local_flutter_window(state, window_id);
+        } else if let Some(window) = state
+            .wayland
+            .as_ref()
+            .and_then(|frontend| frontend.window_for_id(window_id))
+        {
+            activate_window(state, &window, SERIAL_COUNTER.next_serial());
+        }
+    }
+    state.scene_sync.mark_dirty();
+    true
+}
+
+#[cfg(feature = "flutter")]
+pub(super) fn move_window_to_workspace(
+    state: &mut RuntimeState,
+    window_id: u64,
+    monitor_id: Option<i64>,
+    workspace_id: u8,
+    follow: bool,
+) -> bool {
+    let requested_output = monitor_id
+        .and_then(|monitor_id| u64::try_from(monitor_id).ok())
+        .map(denial_core::topology::OutputId);
+    let location = {
+        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+        if frontend.minimized_local_windows.contains(&window_id) {
+            frontend.set_local_flutter_window_minimized(window_id, false);
+        } else if let Some(window) = frontend.window_for_id(window_id)
+            && let Some(root) = frontend.window_root_surface(&window)
+            && frontend.minimized_windows.contains(&root.id())
+        {
+            frontend.set_surface_minimized(root.id(), false);
+        }
+        let location = frontend.move_window_to_workspace(window_id, requested_output, workspace_id);
+        if location.is_some() {
+            if let Some(destination) = requested_output {
+                move_window_geometry_to_output(frontend, window_id, destination);
+            }
+            frontend.rebuild_window_layout();
+        }
+        location
+    };
+    let Some(location) = location else {
+        return false;
+    };
+    let monitor_id = match i64::try_from(location.output.0) {
+        Ok(monitor_id) => monitor_id,
+        Err(_) => return false,
+    };
+    if follow {
+        switch_monitor_workspace(state, monitor_id, workspace_id);
+        if state
+            .wayland
+            .as_ref()
+            .is_some_and(|frontend| frontend.is_local_flutter_window(window_id))
+        {
+            activate_local_flutter_window(state, window_id);
+        } else if let Some(window) = state
+            .wayland
+            .as_ref()
+            .and_then(|frontend| frontend.window_for_id(window_id))
+        {
+            activate_window(state, &window, SERIAL_COUNTER.next_serial());
+        }
+    } else {
+        if focused_local_window(state) == Some(window_id) {
+            state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .clear_local_flutter_focus();
+        }
+        if let Some(window) = state
+            .wayland
+            .as_ref()
+            .and_then(|frontend| frontend.window_for_id(window_id))
+        {
+            release_window_focus(state, &window);
+        }
+    }
+    state.scene_sync.mark_dirty();
+    true
+}
+
+#[cfg(feature = "flutter")]
+fn move_window_geometry_to_output(
+    frontend: &mut super::WaylandFrontend,
+    window_id: u64,
+    destination: denial_core::topology::OutputId,
+) {
+    let Some(destination_geometry) = frontend
+        .outputs
+        .iter()
+        .find(|output| output.id == destination)
+        .map(|output| output.logical_geometry)
+    else {
+        return;
+    };
+    if frontend.is_local_flutter_window(window_id) {
+        let Some(current) = frontend.local_flutter_window_geometry(window_id) else {
+            return;
+        };
+        let current_rect = Rectangle::<i32, Logical>::new(
+            Point::from((current.x.round() as i32, current.y.round() as i32)),
+            Size::from((current.width.round() as i32, current.height.round() as i32)),
+        );
+        let Some(source_geometry) = frontend
+            .output_for_geometry(current_rect)
+            .map(|output| output.logical_geometry)
+        else {
+            return;
+        };
+        let target = transfer_restore_geometry(
+            current_rect,
+            source_geometry,
+            destination_geometry,
+            destination_geometry,
+        );
+        frontend.set_local_flutter_window_global_geometry(
+            window_id,
+            WindowGeometry {
+                x: f64::from(target.loc.x),
+                y: f64::from(target.loc.y),
+                width: f64::from(target.size.w),
+                height: f64::from(target.size.h),
+            },
+        );
+        return;
+    }
+    let Some(window) = frontend.window_for_id(window_id) else {
+        return;
+    };
+    let current = frontend.window_geometry_target(&window);
+    let Some(source_geometry) = frontend
+        .output_for_geometry(current)
+        .map(|output| output.logical_geometry)
+    else {
+        return;
+    };
+    let target = transfer_restore_geometry(
+        current,
+        source_geometry,
+        destination_geometry,
+        destination_geometry,
+    );
+    frontend.set_window_geometry_target(&window, target);
 }
 
 #[cfg(feature = "flutter")]
 pub(super) fn activate_local_flutter_window(state: &mut RuntimeState, window_id: u64) -> bool {
-    if !state
-        .wayland
-        .as_mut()
-        .expect("missing Wayland frontend")
-        .focus_local_flutter_window(window_id)
-    {
+    let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+    if frontend.minimized_local_windows.contains(&window_id) {
+        frontend.set_local_flutter_window_minimized(window_id, false);
+    } else if !frontend.window_is_on_active_workspace(window_id) {
         return false;
     }
+    if !frontend.focus_local_flutter_window(window_id) {
+        return false;
+    }
+    frontend.record_workspace_focus(window_id);
     let keyboard = state
         .wayland
         .as_ref()
@@ -674,6 +953,28 @@ pub(in super::super) fn queue_transient_window_placement(
 ) {
     queue_window_placement_for_monitor_with_persistence(
         state, window, geometry, geometry, phase, change, false,
+    );
+}
+
+/// Publishes transient geometry while retaining the layout row's physical
+/// output even when a scrolling tile is mostly or completely off-screen.
+#[cfg(feature = "flutter")]
+pub(in super::super) fn queue_transient_window_placement_for_monitor(
+    state: &mut RuntimeState,
+    window: &Window,
+    geometry: Rectangle<i32, Logical>,
+    monitor_geometry: Rectangle<i32, Logical>,
+    phase: WindowPlacementPhase,
+    change: WindowPlacementChange,
+) {
+    queue_window_placement_for_monitor_with_persistence(
+        state,
+        window,
+        geometry,
+        monitor_geometry,
+        phase,
+        change,
+        false,
     );
 }
 
@@ -950,11 +1251,59 @@ fn focused_local_window(state: &RuntimeState) -> Option<u64> {
 }
 
 #[cfg(feature = "flutter")]
+pub(super) fn focused_workspace_window(state: &RuntimeState) -> Option<(u64, i64)> {
+    let frontend = state.wayland.as_ref()?;
+    let window_id = frontend.focused_local_flutter_window().or_else(|| {
+        let window = focused_window(state)?;
+        let root = frontend.window_root_surface(&window)?;
+        frontend.surface_id(&root)
+    })?;
+    let location = frontend.workspace_location(window_id)?;
+    Some((window_id, i64::try_from(location.output.0).ok()?))
+}
+
+#[cfg(feature = "flutter")]
 fn queue_local_window_action(state: &mut RuntimeState, window_id: u64, action: WindowAction) {
     state
         .pending_window_events
         .push(PendingWindowEvent::Action(window_id, action));
     state.scene_sync.mark_dirty();
+}
+
+#[cfg(feature = "flutter")]
+pub(super) fn toggle_always_on_top_focused_toplevel(state: &mut RuntimeState) -> bool {
+    let local_window_id = focused_local_window(state);
+    let client_window = local_window_id
+        .is_none()
+        .then(|| focused_window(state))
+        .flatten();
+    let window_id = local_window_id.or_else(|| {
+        let frontend = state.wayland.as_ref()?;
+        let root = frontend.window_root_surface(client_window.as_ref()?)?;
+        frontend.surface_id(&root)
+    });
+    let Some(window_id) = window_id else {
+        return false;
+    };
+
+    let pinned = {
+        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+        if frontend.pinned_windows.remove(&window_id) {
+            false
+        } else {
+            frontend.pinned_windows.insert(window_id);
+            true
+        }
+    };
+    if pinned && let Some(window) = client_window {
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .raise_window(&window, true);
+    }
+    state.scene_sync.mark_dirty();
+    true
 }
 
 #[cfg(feature = "flutter")]
@@ -975,6 +1324,7 @@ pub(super) fn minimize_all_toplevels(state: &mut RuntimeState) -> bool {
         let local_window_ids = frontend
             .local_windows
             .iter()
+            .filter(|window| frontend.window_is_on_active_workspace(window.id))
             .map(|window| window.id)
             .collect::<Vec<_>>();
         let client_windows = frontend
@@ -985,7 +1335,11 @@ pub(super) fn minimize_all_toplevels(state: &mut RuntimeState) -> bool {
                     .x11_surface()
                     .is_none_or(|x11| !x11.is_override_redirect())
                     && frontend.window_root_surface(window).is_some_and(|root| {
-                        root.is_alive() && !frontend.minimized_windows.contains(&root.id())
+                        root.is_alive()
+                            && !frontend.minimized_windows.contains(&root.id())
+                            && frontend
+                                .surface_id(&root)
+                                .is_some_and(|id| frontend.window_is_on_active_workspace(id))
                     })
             })
             .cloned()
@@ -1013,6 +1367,9 @@ pub(super) fn minimize_toplevel_by_id(state: &mut RuntimeState, window_id: u64) 
         let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
         if frontend.focused_local_flutter_window() == Some(window_id) {
             frontend.clear_local_flutter_focus();
+        }
+        if !frontend.set_local_flutter_window_minimized(window_id, true) {
+            return false;
         }
         queue_local_window_action(state, window_id, WindowAction::Minimize);
         return true;

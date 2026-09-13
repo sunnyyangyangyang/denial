@@ -102,6 +102,7 @@ Suggests:       ddcutil
 Suggests:       gdm
 Suggests:       iwd
 Suggests:       NetworkManager
+Suggests:       ModemManager
 Conflicts:      denial-git
 Requires(post): systemd
 Requires(preun): systemd
@@ -305,6 +306,8 @@ fi
 /usr/lib/denial/flutter/data/flutter_assets
 /usr/lib/denial/flutter/lib/libapp.so
 /usr/lib/denial/settings
+/usr/lib/elogind/system-sleep/denial-suspend-mode
+/usr/lib/systemd/system-sleep/denial-suspend-mode
 /usr/lib/systemd/user/denial-session.target
 /usr/lib/systemd/user/denial-portal.service
 /usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.denial.service

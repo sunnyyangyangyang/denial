@@ -166,18 +166,23 @@ if [[ -r "$CONFIG_FILE" ]]; then
   source "$CONFIG_FILE"
 fi
 
-shell_profile="${DENIA_SHELL_PROFILE:-desktop}"
+shell_profile="${DENIAL_SHELL_PROFILE-${DENIA_SHELL_PROFILE-desktop}}"
 case "$shell_profile" in
   mobile | desktop) ;;
-  *) die "DENIA_SHELL_PROFILE must be mobile or desktop, got: $shell_profile" ;;
+  *) die "DENIAL_SHELL_PROFILE must be mobile or desktop, got: $shell_profile" ;;
 esac
+export DENIAL_SHELL_PROFILE="$shell_profile"
 export DENIA_SHELL_PROFILE="$shell_profile"
 
-flutter_renderer="${DENIA_FLUTTER_RENDERER:-}"
+flutter_renderer="${DENIAL_FLUTTER_RENDERER-${DENIA_FLUTTER_RENDERER-}}"
 case "$flutter_renderer" in
   '' | skia | impeller) ;;
-  *) die "DENIA_FLUTTER_RENDERER must be skia or impeller, got: $flutter_renderer" ;;
+  *) die "DENIAL_FLUTTER_RENDERER must be skia or impeller, got: $flutter_renderer" ;;
 esac
+
+no_predecessor="${DENIAL_NO_PREDECESSOR-${DENIA_NO_PREDECESSOR-}}"
+export DENIAL_NO_PREDECESSOR="$no_predecessor"
+export DENIA_NO_PREDECESSOR="$no_predecessor"
 
 xwayland_scale_mode="${DENIAL_XWAYLAND_SCALE_MODE:-fractional}"
 case "$xwayland_scale_mode" in
@@ -239,7 +244,7 @@ if [[ "${1:-}" == --check ]]; then
   printf 'ok  %-16s %s\n' 'output config' "$output_config"
   printf 'ok  %-16s %s\n' 'DRM device' "$drm_device"
   printf 'ok  %-16s %s\n' 'render device' "${render_device:-$drm_device}"
-  printf 'ok  %-16s %s\n' 'shell profile' "$DENIA_SHELL_PROFILE"
+  printf 'ok  %-16s %s\n' 'shell profile' "$DENIAL_SHELL_PROFILE"
   printf 'ok  %-16s %s\n' 'Flutter renderer' "${flutter_renderer:-impeller (default)}"
   printf 'ok  %-16s %s\n' 'Xwayland scale' "$xwayland_scale_mode"
   printf 'ok  %-16s %s\n' \

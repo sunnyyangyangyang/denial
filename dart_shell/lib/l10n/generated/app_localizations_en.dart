@@ -9,6 +9,9 @@ class AppLocalizationsEn extends AppLocalizations {
   AppLocalizationsEn([String locale = 'en']) : super(locale);
 
   @override
+  String get homeResizeWidget => 'Resize widget';
+
+  @override
   String get actionCancel => 'Cancel';
 
   @override
@@ -1365,6 +1368,25 @@ class AppLocalizationsEn extends AppLocalizations {
       'Keep the session in memory and enter low power after extended inactivity.';
 
   @override
+  String get settingsSuspendMode => 'Suspend mode';
+
+  @override
+  String get settingsSuspendModeDescription =>
+      'Choose how Linux keeps memory powered. This applies to every suspend while Denial is active.';
+
+  @override
+  String get settingsSuspendModeS2idle => 'Suspend to idle (s2idle)';
+
+  @override
+  String get settingsSuspendModeShallow => 'Standby (shallow)';
+
+  @override
+  String get settingsSuspendModeDeep => 'Suspend to RAM (deep)';
+
+  @override
+  String get settingsSuspendModeUnavailable => 'Unavailable';
+
+  @override
   String get settingsAvailable => 'Available';
 
   @override
@@ -1560,6 +1582,69 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get settingsBackdropBlurOpacityThreshold =>
       'Minimum pixel opacity for blur';
+
+  @override
+  String get settingsGlassAppearance => 'Glass appearance';
+
+  @override
+  String get settingsGlassTransparency => 'Transparency of all glass surfaces';
+
+  @override
+  String get settingsTransparencyTitle => 'Transparency material';
+
+  @override
+  String get settingsTransparencyOff => 'Off';
+
+  @override
+  String get settingsTransparencyBlur => 'Blur';
+
+  @override
+  String get settingsTransparencyGlass => 'Glass';
+
+  @override
+  String get settingsTransparencyOffDescription =>
+      'Leave translucent surfaces clear without processing the desktop behind them.';
+
+  @override
+  String get settingsTransparencyBlurDescription =>
+      'Use Denial’s current fast Gaussian backdrop blur.';
+
+  @override
+  String get settingsTransparencyGlassDescription =>
+      'Refract the sharp desktop through a frosted, accent-tinted lens with directional edge lighting.';
+
+  @override
+  String get settingsGlassFrost => 'Frost';
+
+  @override
+  String get settingsGlassQuality => 'Render quality';
+
+  @override
+  String get settingsGlassThickness => 'Optical thickness';
+
+  @override
+  String get settingsGlassRefraction => 'Refraction';
+
+  @override
+  String get settingsGlassDispersion => 'Color dispersion';
+
+  @override
+  String get settingsGlassSaturation => 'Saturation';
+
+  @override
+  String get settingsGlassAccentTint => 'Accent tint';
+
+  @override
+  String get settingsGlassBrightness => 'Luminosity';
+
+  @override
+  String get settingsGlassLightAngle => 'Light direction';
+
+  @override
+  String get settingsGlassLightIntensity => 'Light intensity';
+
+  @override
+  String get settingsGlassEdgeStrength => 'Edge shine';
 
   @override
   String get settingsBackdropDimming => 'Backdrop dimming';
@@ -1826,6 +1911,16 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsDisplayScale => 'Scale';
+
+  @override
+  String get settingsDisplayScaleInvalid => 'Enter a value from 50 to 600.';
+
+  @override
+  String get settingsDisplayScalePreset => 'Presets';
+
+  @override
+  String get settingsDisplayScaleRange =>
+      'Enter 50–600%. Values are rounded to the nearest supported scale. Below 100% may look softer.';
 
   @override
   String get settingsDisplayVariableRefreshRate =>
@@ -2226,6 +2321,21 @@ class AppLocalizationsEn extends AppLocalizations {
       'Three-finger swipe right';
 
   @override
+  String get settingsShortcutGestureFourFingerSwipeLeft =>
+      'Four-finger swipe left';
+
+  @override
+  String get settingsShortcutGestureFourFingerSwipeRight =>
+      'Four-finger swipe right';
+
+  @override
+  String get settingsShortcutGestureFourFingerSwipeUp => 'Four-finger swipe up';
+
+  @override
+  String get settingsShortcutGestureFourFingerSwipeDown =>
+      'Four-finger swipe down';
+
+  @override
   String get settingsShortcutInputCategoryModifier => 'Modifier';
 
   @override
@@ -2297,6 +2407,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'Enter or leave fullscreen';
 
   @override
+  String get settingsShortcutActionToggleWindowAlwaysOnTop =>
+      'Toggle always on top';
+
+  @override
   String get settingsShortcutActionReleasePointer => 'Release pointer';
 
   @override
@@ -2349,6 +2463,30 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsShortcutActionSwapDown => 'Swap window downward';
 
   @override
+  String get settingsShortcutActionPreviousWorkspace => 'Previous workspace';
+
+  @override
+  String get settingsShortcutActionNextWorkspace => 'Next workspace';
+
+  @override
+  String get settingsShortcutActionMoveToPreviousWorkspace =>
+      'Move window to previous workspace';
+
+  @override
+  String get settingsShortcutActionMoveToNextWorkspace =>
+      'Move window to next workspace';
+
+  @override
+  String settingsShortcutActionSwitchWorkspace(int workspace) {
+    return 'Switch to workspace $workspace';
+  }
+
+  @override
+  String settingsShortcutActionMoveToWorkspace(int workspace) {
+    return 'Move window to workspace $workspace';
+  }
+
+  @override
   String get settingsLayoutDescription =>
       'Control the spacing reserved around ordinary and maximized windows.';
 
@@ -2360,7 +2498,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsWindowLayoutDescription =>
-      'Stacking lets windows overlap and move freely. Tiling uses a dynamic binary tree while keeping transient windows floating.';
+      'Stacking lets windows overlap. Tiling divides the desktop dynamically. Scrolling arranges full-height columns in a focus-following horizontal strip.';
 
   @override
   String get settingsWindowLayoutDwindle => 'Tiling';
@@ -2369,7 +2507,46 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsWindowLayoutStacking => 'Stacking';
 
   @override
+  String get settingsWindowLayoutScrolling => 'Scrolling';
+
+  @override
   String get settingsWindowLayoutTitle => 'Window layout';
+
+  @override
+  String get settingsWorkspacesTitle => 'Workspaces';
+
+  @override
+  String get settingsWorkspacesEnable => 'Enable workspaces';
+
+  @override
+  String get settingsWorkspacesDescription =>
+      'Each monitor switches workspaces independently. Minimized windows remain available across every workspace on their monitor.';
+
+  @override
+  String get settingsWorkspaceCount => 'Workspace count';
+
+  @override
+  String get settingsWorkspaceSwitchingOrientation => 'Switching direction';
+
+  @override
+  String get settingsWorkspaceSwitchingHorizontal => 'Horizontal';
+
+  @override
+  String get settingsWorkspaceSwitchingVertical => 'Vertical';
+
+  @override
+  String workspaceLabel(int workspace) {
+    return 'Workspace $workspace';
+  }
+
+  @override
+  String get workspaceActive => 'active';
+
+  @override
+  String get workspaceOccupied => 'occupied';
+
+  @override
+  String get workspaceEmpty => 'empty';
 
   @override
   String get settingsLiveBadge => 'LIVE';
@@ -3457,5 +3634,181 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String windowUntitled(int windowId) {
     return 'Window $windowId';
+  }
+
+  @override
+  String get settingsGlassAdvanced => 'Glass tuning';
+
+  @override
+  String get settingsGlassReset => 'Reset glass';
+
+  @override
+  String get settingsGlassTuningDescription =>
+      'Changes apply immediately. The defaults preserve the original glass effect.';
+
+  @override
+  String get settingsGlassBevelWidth => 'Bevel width';
+
+  @override
+  String get settingsGlassRefractionDepth => 'Refraction depth';
+
+  @override
+  String get settingsGlassRimWidth => 'Highlight width';
+
+  @override
+  String get settingsGlassRimFalloff => 'Highlight falloff';
+
+  @override
+  String get settingsGlassOppositeLight => 'Opposite-edge light';
+
+  @override
+  String settingsGlassRimPixels(String width) {
+    return '$width px';
+  }
+
+  @override
+  String get lockFingerprintNotRecognized => 'Fingerprint not recognized';
+
+  @override
+  String get fingerprintSection => 'Fingerprint';
+
+  @override
+  String get fingerprintPasswordPrompt =>
+      'Enter your sudo password to manage fingerprints.';
+
+  @override
+  String get fingerprintSudoPassword => 'Sudo password';
+
+  @override
+  String get fingerprintContinue => 'Continue';
+
+  @override
+  String get fingerprintDescription =>
+      'Use your enrolled fingers to unlock Denial.';
+
+  @override
+  String get fingerprintEmptyTitle => 'No fingerprints enrolled';
+
+  @override
+  String get fingerprintEmptyDescription =>
+      'Choose a finger below to enroll your first fingerprint.';
+
+  @override
+  String get fingerprintChooseFinger => 'Finger to enroll';
+
+  @override
+  String get fingerprintEnroll => 'Enroll fingerprint';
+
+  @override
+  String get fingerprintAdd => 'Add fingerprint';
+
+  @override
+  String get fingerprintAuthenticationFailed =>
+      'Password verification failed. Try again.';
+
+  @override
+  String get fingerprintExpired => 'Enter your password again to continue.';
+
+  @override
+  String get fingerprintPreparing => 'Preparing the fingerprint reader…';
+
+  @override
+  String get fingerprintTouchSensor =>
+      'Touch and lift your selected finger on the sensor.';
+
+  @override
+  String get fingerprintEnrolled =>
+      'Fingerprint enrolled. You can now use it to unlock Denial.';
+
+  @override
+  String get fingerprintCancelled => 'Enrollment cancelled.';
+
+  @override
+  String get fingerprintDuplicate =>
+      'This fingerprint is already enrolled. Choose another finger.';
+
+  @override
+  String get fingerprintRetry =>
+      'Lift your finger and touch the sensor again, adjusting its position.';
+
+  @override
+  String get fingerprintUnavailable =>
+      'Fingerprint management could not complete. Check the reader and try again.';
+
+  @override
+  String fingerprintProgress(int completed, int total) {
+    return '$completed of $total scans';
+  }
+
+  @override
+  String get fingerprintLeftThumb => 'Left thumb';
+
+  @override
+  String get fingerprintLeftIndex => 'Left index finger';
+
+  @override
+  String get fingerprintLeftMiddle => 'Left middle finger';
+
+  @override
+  String get fingerprintLeftRing => 'Left ring finger';
+
+  @override
+  String get fingerprintLeftLittle => 'Left little finger';
+
+  @override
+  String get fingerprintRightThumb => 'Right thumb';
+
+  @override
+  String get fingerprintRightIndex => 'Right index finger';
+
+  @override
+  String get fingerprintRightMiddle => 'Right middle finger';
+
+  @override
+  String get fingerprintRightRing => 'Right ring finger';
+
+  @override
+  String get fingerprintRightLittle => 'Right little finger';
+
+  @override
+  String get mobileData => 'Mobile data';
+
+  @override
+  String get mobileConnected => 'Connected';
+
+  @override
+  String get mobileDisconnected => 'Not connected';
+
+  @override
+  String get mobileUnavailable => 'Mobile network unavailable';
+
+  @override
+  String get mobileChangeFailed => 'Unable to change mobile data';
+
+  @override
+  String get simPinTitle => 'Unlock SIM';
+
+  @override
+  String get simPinLabel => 'SIM PIN';
+
+  @override
+  String get simPinUnlock => 'Unlock SIM';
+
+  @override
+  String get simPinLater => 'Later';
+
+  @override
+  String get simPinFailed =>
+      'SIM could not be unlocked. Check your PIN and remaining attempts.';
+
+  @override
+  String get simPukRequired => 'SIM requires a PUK. Contact your carrier.';
+
+  @override
+  String get simLocked => 'SIM locked';
+
+  @override
+  String simPinRetries(int count) {
+    return '$count attempts remaining';
   }
 }

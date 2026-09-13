@@ -34,6 +34,26 @@ impl WaylandFrontend {
     /// events in their overlap.
     pub(super) fn raise_window(&mut self, window: &Window, activate: bool) {
         self.space.raise_element(window, activate);
+        if activate {
+            self.activate_layout_window(window);
+        }
+        #[cfg(feature = "flutter")]
+        let pinned_windows = {
+            let raised_is_pinned = self.window_is_pinned(window);
+            if raised_is_pinned {
+                Vec::new()
+            } else {
+                self.space
+                    .elements()
+                    .filter(|candidate| self.window_is_pinned(candidate))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            }
+        };
+        #[cfg(feature = "flutter")]
+        for pinned in &pinned_windows {
+            self.space.raise_element(pinned, false);
+        }
         let Some(surface) = window.x11_surface().cloned() else {
             return;
         };
@@ -51,6 +71,19 @@ impl WaylandFrontend {
                 window = surface.window_id(),
                 "could not synchronize raised X11 window"
             );
+        }
+        #[cfg(feature = "flutter")]
+        for pinned in pinned_windows {
+            let Some(surface) = pinned.x11_surface() else {
+                continue;
+            };
+            if let Err(error) = xwm.raise_window(surface) {
+                warn!(
+                    %error,
+                    window = surface.window_id(),
+                    "could not preserve pinned X11 window order"
+                );
+            }
         }
     }
 
@@ -71,6 +104,17 @@ impl WaylandFrontend {
     pub(super) fn window_shell_fullscreen_locked(&self, window: &Window) -> bool {
         self.window_root_surface(window)
             .is_some_and(|root_surface| self.shell_fullscreen_locks.contains(&root_surface.id()))
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn window_is_pinned(&self, window: &Window) -> bool {
+        let own_id = self
+            .window_root_surface(window)
+            .and_then(|surface| self.surface_id(&surface));
+        own_id.is_some_and(|window_id| self.pinned_windows.contains(&window_id))
+            || self
+                .transient_parent_stable_id(window)
+                .is_some_and(|window_id| self.pinned_windows.contains(&window_id))
     }
 
     #[cfg(feature = "flutter")]
@@ -98,8 +142,10 @@ impl WaylandFrontend {
 
     #[cfg(feature = "flutter")]
     pub(super) fn exact_window_geometry(&self, window: &Window) -> Option<Rectangle<i32, Logical>> {
-        self.window_root_surface(window)
-            .and_then(|surface| self.exact_window_geometries.get(&surface.id()).copied())
+        self.mobile_window_geometry(window).or_else(|| {
+            self.window_root_surface(window)
+                .and_then(|surface| self.exact_window_geometries.get(&surface.id()).copied())
+        })
     }
 
     #[cfg(feature = "flutter")]
@@ -200,6 +246,33 @@ impl WaylandFrontend {
             .is_some_and(|surface| surface.is_transient_for().is_some())
     }
 
+    #[cfg(feature = "flutter")]
+    pub(super) fn transient_parent_stable_id(&self, window: &Window) -> Option<u64> {
+        if let Some(toplevel) = window.toplevel() {
+            let parent = with_states(toplevel.wl_surface(), |states| {
+                states
+                    .data_map
+                    .get::<XdgToplevelSurfaceData>()
+                    .and_then(|attributes| {
+                        attributes
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .parent
+                            .clone()
+                    })
+            })?;
+            return self.surface_ids.get(&parent.id()).copied();
+        }
+        let parent_id = window.x11_surface()?.is_transient_for()?;
+        self.space.elements().find_map(|candidate| {
+            candidate
+                .x11_surface()
+                .filter(|surface| surface.window_id() == parent_id)
+                .and_then(|_| self.window_root_surface(candidate))
+                .and_then(|root| self.surface_ids.get(&root.id()).copied())
+        })
+    }
+
     pub(super) fn fallback_output_geometry(&self) -> Option<Rectangle<i32, Logical>> {
         let pointer = Point::<i32, Logical>::from((
             self.pointer_location.x.floor() as i32,
@@ -294,6 +367,10 @@ impl WaylandFrontend {
         &mut self,
         window: &Window,
     ) -> Option<(RestoredWindowPlacement, Rectangle<i32, Logical>)> {
+        #[cfg(feature = "flutter")]
+        if self.mobile_shell {
+            return None;
+        }
         if self.window_is_layout_managed(window) {
             return None;
         }
@@ -544,8 +621,42 @@ impl WaylandFrontend {
     }
 
     pub(super) fn update_window_output_membership(&mut self, window: &Window) {
+        #[cfg(feature = "flutter")]
+        {
+            let location = self
+                .space
+                .element_location(window)
+                .unwrap_or_else(|| self.window_geometry_target(window).loc);
+            super::window_outputs::refresh_window_outputs(
+                window,
+                location,
+                self.outputs
+                    .iter()
+                    .map(|entry| (&entry.output, entry.logical_geometry)),
+            );
+        }
         let output_index = self.output_index_for_geometry(self.window_geometry_target(window));
         let output = output_index.map(|index| self.outputs[index].id);
+        let toplevel_bounds = output_index.map(|index| {
+            let output = &self.outputs[index];
+            #[cfg(feature = "flutter")]
+            {
+                if let Some(mobile) = self.mobile_window_geometry(window) {
+                    return mobile.size;
+                }
+                let work_area =
+                    self.maximize_work_area(Some(&output.output), output.logical_geometry);
+                super::window_management::shell_content_geometry(
+                    work_area,
+                    super::window_management::shell_draws_server_frame(window),
+                )
+                .size
+            }
+            #[cfg(not(feature = "flutter"))]
+            {
+                output.logical_geometry.size
+            }
+        });
         let output_scale = output_index
             .map(|index| {
                 self.outputs[index]
@@ -560,6 +671,14 @@ impl WaylandFrontend {
                 fractional_scale.set_preferred_scale(preferred_scale);
             });
         });
+        if let Some(toplevel) = window.toplevel() {
+            // XDG deliberately permits a size-less initial configure so a
+            // client can choose its own dimensions. Publish the standard
+            // maximum useful bounds at the same time; this lets clients make
+            // that decision before attaching their first buffer without any
+            // compositor-specific protocol or shell-geometry guesswork.
+            toplevel.with_pending_state(|pending| pending.bounds = toplevel_bounds);
+        }
         #[cfg(feature = "flutter")]
         if let Some(root_surface) = self.window_root_surface(window) {
             if let Some(window_id) = self.surface_id(&root_surface) {
@@ -574,6 +693,16 @@ impl WaylandFrontend {
 
     #[cfg(feature = "flutter")]
     pub(super) fn remove_window_output_membership(&mut self, surface: &WlSurface) {
+        use smithay::desktop::space::SpaceElement;
+        if let Some(window) = self
+            .space
+            .elements()
+            .find(|window| window.wl_surface().as_deref() == Some(surface))
+        {
+            for entry in &self.outputs {
+                window.output_leave(&entry.output);
+            }
+        }
         self.input_root_ids.remove(&surface.id());
         self.output_window_membership.remove(&surface.id());
     }
@@ -705,9 +834,9 @@ impl WaylandFrontend {
         Some(WindowPlacement {
             window_id,
             monitor_id,
-            // Workspaces are not split yet. Keep a real, stable ownership ID
-            // rather than the protocol's invalid -1 sentinel.
-            workspace_id: 1,
+            workspace_id: self
+                .workspace_location(window_id)
+                .map_or(1, |location| i64::from(location.workspace)),
             phase,
             change,
             geometry: WindowGeometry {
@@ -937,7 +1066,9 @@ impl WaylandFrontend {
         Some(WindowPlacement {
             window_id,
             monitor_id,
-            workspace_id: 1,
+            workspace_id: self
+                .workspace_location(window_id)
+                .map_or(1, |location| i64::from(location.workspace)),
             phase,
             change,
             geometry: WindowGeometry {
@@ -952,17 +1083,81 @@ impl WaylandFrontend {
     #[cfg(feature = "flutter")]
     pub(super) fn remove_local_flutter_window(&mut self, window_id: u64) -> bool {
         self.local_vertical_restore_geometries.remove(&window_id);
+        self.minimized_local_windows.remove(&window_id);
+        self.pinned_windows.remove(&window_id);
+        self.forget_window_workspace(window_id);
         self.local_windows.remove(window_id)
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn set_local_flutter_window_minimized(
+        &mut self,
+        window_id: u64,
+        minimized: bool,
+    ) -> bool {
+        let changed = if minimized {
+            self.minimized_local_windows.insert(window_id)
+        } else {
+            self.minimized_local_windows.remove(&window_id)
+        };
+        if !changed {
+            return false;
+        }
+        if minimized {
+            let fallback = self
+                .local_flutter_window_geometry(window_id)
+                .and_then(|geometry| {
+                    let center = Point::<i32, Logical>::from((
+                        (geometry.x + geometry.width / 2.0).round() as i32,
+                        (geometry.y + geometry.height / 2.0).round() as i32,
+                    ));
+                    self.outputs
+                        .iter()
+                        .find(|output| output.logical_geometry.contains(center))
+                        .map(|output| output.id)
+                })
+                .or(self.ticker_output)
+                .or_else(|| self.outputs.first().map(|output| output.id));
+            if let Some(fallback) = fallback {
+                self.mark_window_minimized(window_id, fallback);
+            }
+        } else {
+            self.restore_window_workspace(window_id);
+        }
+        self.invalidate_idle_inhibition();
+        true
     }
 
     #[cfg(feature = "flutter")]
     pub(super) fn set_surface_minimized(&mut self, surface: ObjectId, minimized: bool) -> bool {
         let changed = if minimized {
-            self.minimized_windows.insert(surface)
+            self.minimized_windows.insert(surface.clone())
         } else {
             self.minimized_windows.remove(&surface)
         };
         if changed {
+            if let Some(window_id) = self.surface_ids.get(&surface).copied() {
+                if minimized {
+                    let fallback = self
+                        .space
+                        .elements()
+                        .find(|window| {
+                            self.window_root_surface(window)
+                                .is_some_and(|root| root.id() == surface)
+                        })
+                        .and_then(|window| {
+                            self.output_for_geometry(self.window_geometry_target(window))
+                        })
+                        .map(|output| output.id)
+                        .or(self.ticker_output)
+                        .or_else(|| self.outputs.first().map(|output| output.id));
+                    if let Some(fallback) = fallback {
+                        self.mark_window_minimized(window_id, fallback);
+                    }
+                } else {
+                    self.restore_window_workspace(window_id);
+                }
+            }
             self.invalidate_idle_inhibition();
         }
         changed
@@ -1048,6 +1243,10 @@ impl WaylandFrontend {
             self.pending_shm_snapshots.remove(&object_id);
             self.surface_buffer_revisions.remove(&object_id);
             self.minimized_windows.remove(&object_id);
+            if let Some(stable_id) = stable_id {
+                self.pinned_windows.remove(&stable_id);
+                self.forget_window_workspace(stable_id);
+            }
             self.shell_fullscreen_locks.remove(&object_id);
             if let Some(stable_id) = stable_id {
                 self.pointer_constraint_escape.forget_window(stable_id);

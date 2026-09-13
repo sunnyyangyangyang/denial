@@ -1,6 +1,7 @@
 //! Device discovery, renderer construction, initial modeset, and runtime launch.
 
 use super::*;
+use std::collections::HashMap;
 
 pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     #[cfg(not(feature = "flutter"))]
@@ -9,6 +10,10 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     }
 
     let runtime_limit = options.runtime_limit();
+    let preserve_predecessor = preserves_predecessor_kms_state(
+        runtime_limit,
+        denial_core::environment::flag("DENIAL_NO_PREDECESSOR"),
+    );
     let output_configuration = RuntimeOutputConfiguration::from_options(&options);
     let mut settings = options
         .wayland
@@ -94,7 +99,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     if !drm.is_atomic() {
         return Err("the selected DRM device does not expose atomic modesetting".into());
     }
-    if !preserves_predecessor_kms_state(runtime_limit) {
+    if !preserve_predecessor {
         // A display manager can leave cursor or overlay planes latched when it
         // releases DRM master. Denial composites its cursor into the Flutter
         // scene, so take ownership of those planes before the first Denial
@@ -105,9 +110,13 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     let mut kms = KmsContext::new(drm);
     let mut frame_event_loop = if runtime_limit != RuntimeLimit::TestOnly {
         let event_loop = EventLoop::<RuntimeState>::try_new()?;
+        let mut presentation_clocks = HashMap::<
+            crtc::Handle,
+            (presentation_clock::FeedbackClock, Option<Instant>, bool),
+        >::new();
         event_loop
             .handle()
-            .insert_source(drm_notifier, |event, metadata, state| match event {
+            .insert_source(drm_notifier, move |event, metadata, state| match event {
                 DrmEvent::VBlank(crtc) => {
                     state.pending.remove(&crtc);
                     state.vblank_events += 1;
@@ -118,27 +127,39 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                     // to a bare CRTC here made the later OnVsync timestamp
                     // depend on batching latency instead.
                     let delivered_at = Instant::now();
-                    let presented_at = metadata.as_ref().and_then(|metadata| match metadata.time {
+                    let raw_timestamp = metadata.as_ref().and_then(|metadata| match metadata.time {
                         DrmEventTime::Monotonic(timestamp) => Some(timestamp),
                         DrmEventTime::Realtime(_) => None,
                     });
-                    // A DRM event can spend several milliseconds waiting in
-                    // the event loop on a busy mobile compositor. Compare its
-                    // physical edge with the synthetic display clock, not its
-                    // userspace delivery time, or one edge can be mistaken for
-                    // a second Flutter vsync. Linux Instant and DRM monotonic
-                    // timestamps use the same clock rate; translate only the
-                    // elapsed duration so their private epochs need not match.
-                    let observed_at = presented_at
-                        .and_then(|presented_at| {
-                            monotonic_now().map(|monotonic_now| {
-                                presentation_instant(delivered_at, monotonic_now, presented_at)
-                            })
-                        })
+                    let raw_sequence = metadata.as_ref().map(|metadata| metadata.sequence);
+                    let now = monotonic_now();
+                    let (clock, last_report, warned) = presentation_clocks.entry(crtc).or_default();
+                    let feedback = clock.observe(now, raw_timestamp, raw_sequence);
+                    if raw_timestamp.is_some() && feedback.timestamp.is_none() && !*warned {
+                        warn!(?crtc, ?raw_timestamp, ?raw_sequence,
+                            reason = feedback.timestamp_status,
+                            "invalid DRM presentation timestamp; using completion delivery without physical clock feedback");
+                        *warned = true;
+                    }
+                    #[cfg(feature = "flutter")]
+                    if render_audit_enabled() && (state.vblank_events <= 8
+                        || last_report.is_none_or(|last| delivered_at.duration_since(last) >= Duration::from_secs(1))) {
+                        info!(target: "deniald::render_audit", source = "drm_feedback", ?crtc,
+                            raw_timestamp_us = ?raw_timestamp.map(|time| time.as_micros()),
+                            monotonic_us = ?now.map(|time| time.as_micros()),
+                            ?raw_sequence, timestamp_status = feedback.timestamp_status,
+                            physical_timestamp = feedback.timestamp.is_some(),
+                            valid_sequence = feedback.sequence.is_some(),
+                            "DRM completion metadata audit");
+                        *last_report = Some(delivered_at);
+                    }
+                    // Invalid timestamps still retire the completed buffer, but
+                    // never train the output phase or masquerade as scanout time.
+                    let presented_at = feedback.timestamp;
+                    let observed_at = presented_at.zip(now)
+                        .map(|(timestamp, now)| presentation_instant(delivered_at, now, timestamp))
                         .unwrap_or(delivered_at);
-                    let sequence = metadata
-                        .as_ref()
-                        .map(|metadata| u64::from(metadata.sequence));
+                    let sequence = feedback.sequence;
                     state.completed_page_flips.push_back(PageFlipCompletion {
                         crtc,
                         observed_at,
@@ -264,15 +285,14 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     for output in outputs {
         let original_mode = match kms.drm.get_crtc(output.crtc)?.mode() {
             Some(mode) => mode,
-            None if !preserves_predecessor_kms_state(runtime_limit) => {
+            None => {
                 info!(
                     output = output.name,
                     crtc = ?output.crtc,
-                    "display-manager handoff supplied an inactive CRTC"
+                    "selected output was inactive before Denial takeover"
                 );
                 output.mode
             }
-            None => return Err(format!("{:?} has no active mode", output.crtc).into()),
         };
         let surface = kms
             .drm
@@ -404,7 +424,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
         "testing initial atomic scanout state"
     );
 
-    let mut restore_state = if !preserves_predecessor_kms_state(runtime_limit) {
+    let mut restore_state = if !preserve_predecessor {
         // The display manager/logind may disable its CRTC between libseat
         // activation and this point. A real login session hands KMS back by
         // releasing DRM master; it must not depend on cloning a greeter
@@ -415,11 +435,23 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     } else {
         let state = RestoreState::capture(&kms.drm, &kms.scanouts)?;
         state.test(&kms.drm)?;
-        info!(
-            properties = state.property_count(),
-            framebuffer_aliases = state.owned_framebuffer_count(),
-            "pre-Denial KMS state is atomically restorable"
-        );
+        if state.owned_framebuffer_count() == 0 {
+            // No primary plane was bound before Denial acquired DRM master.
+            // There is no predecessor image to preserve, so use the same
+            // non-primary-plane cleanup as an explicit session handoff.
+            kms_state::release_inherited_planes(&kms.drm);
+            info!(
+                outputs = kms.scanouts.len(),
+                "no predecessor KMS scanout detected; inactive state will be restored"
+            );
+        } else {
+            info!(
+                properties = state.property_count(),
+                framebuffer_aliases = state.owned_framebuffer_count(),
+                outputs = kms.scanouts.len(),
+                "pre-Denial KMS state is atomically restorable"
+            );
+        }
         state
     };
 
@@ -548,7 +580,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
         None
     };
     #[cfg(feature = "flutter")]
-    let flutter = if let Some(launcher) = flutter_launcher.as_mut() {
+    let mut flutter = if let Some(launcher) = flutter_launcher.as_mut() {
         Some(
             launcher.start(
                 &renderer,
@@ -633,7 +665,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                         .publisher(),
                     portal_ipc: portal_ipc_server.as_ref().map(PortalIpcServer::publisher),
                     wayland,
-                    flutter: flutter.ok_or("Flutter runtime was not initialized")?,
+                    flutter: &mut flutter,
                     flutter_launcher: flutter_launcher
                         .as_mut()
                         .ok_or("Flutter launcher was not initialized")?,
@@ -658,7 +690,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                 restore_state: &mut restore_state,
                 wayland,
                 #[cfg(feature = "flutter")]
-                flutter,
+                flutter: flutter.take(),
                 #[cfg(feature = "flutter")]
                 flutter_launcher: flutter_launcher.as_mut(),
                 frame_count,
@@ -706,7 +738,8 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
         // but an error or panic can leave the Flutter loop before reaching
         // that code. Never let such an exceptional exit fall through to the
         // synchronous atomic restore below: the display manager owns the next
-        // modeset.
+        // modeset. The Flutter event loop only borrows its runtime, so an
+        // exceptional return also retains the engine until after this handoff.
         kms.pause();
     }
     let restore = kms.restore_once(&restore_state, current_fb);

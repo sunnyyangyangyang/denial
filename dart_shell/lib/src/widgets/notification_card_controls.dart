@@ -4,11 +4,13 @@ class _NotificationActivator extends StatefulWidget {
   const _NotificationActivator({
     required this.semanticLabel,
     required this.onActivate,
+    required this.borderRadius,
     required this.child,
   });
 
   final String semanticLabel;
   final VoidCallback onActivate;
+  final BorderRadius borderRadius;
   final Widget child;
 
   @override
@@ -40,9 +42,7 @@ class _NotificationActivatorState extends State<_NotificationActivator> {
         onTap: widget.onActivate,
         child: DecoratedBox(
           decoration: BoxDecoration(
-            borderRadius: context.shellTheme.borderRadius(
-              ShellRadii.notification,
-            ),
+            borderRadius: widget.borderRadius,
             border: _focused
                 ? Border.all(color: ShellTheme.of(context).accent, width: 1.5)
                 : null,
@@ -58,9 +58,17 @@ class _NotificationActionButton extends StatefulWidget {
   const _NotificationActionButton({
     required this.label,
     required this.onPressed,
+    this.mobile = false,
+    this.fontSize = 12,
+    this.textColor,
+    this.visualScale = 1,
   });
 
   final String label;
+  final bool mobile;
+  final double fontSize;
+  final Color? textColor;
+  final double visualScale;
   final VoidCallback onPressed;
 
   @override
@@ -101,25 +109,43 @@ class _NotificationActionButtonState extends State<_NotificationActionButton> {
                 ? Duration.zero
                 : Motion.pill,
             curve: Motion.standard,
-            constraints: const BoxConstraints(minWidth: 48),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            constraints: BoxConstraints(
+              minWidth:
+                  MobileNotificationMetrics.actionMinimumWidth *
+                  widget.visualScale,
+            ),
+            padding: EdgeInsets.symmetric(
+              horizontal:
+                  MobileNotificationMetrics.actionHorizontalInset *
+                  widget.visualScale,
+            ),
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: _hovered || _focused
                   ? context.shellTheme.accentPalette.container
                   : context.shellColors.surfaceContainerHighest,
-              borderRadius: context.shellTheme.borderRadius(12),
-              border: Border.all(
-                color: _focused
-                    ? ShellTheme.of(context).accent
-                    : context.shellColors.hairlineSoft,
+              borderRadius: context.shellTheme.borderRadius(
+                MobileNotificationMetrics.actionRadius * widget.visualScale,
               ),
+              border: _focused
+                  ? Border.all(color: ShellTheme.of(context).accent)
+                  : widget.mobile &&
+                        context.shellTheme.transparencyMode ==
+                            ShellTransparencyMode.glass
+                  ? null
+                  : Border.all(color: context.shellColors.hairlineSoft),
             ),
             child: Text(
               widget.label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: ShellText.cardTitle.copyWith(fontSize: 12),
+              style: ShellText.cardTitle.copyWith(
+                fontSize: widget.fontSize,
+                color: widget.textColor,
+                fontWeight: widget.textColor != null
+                    ? FontWeight.w700
+                    : FontWeight.w600,
+              ),
             ),
           ),
         ),
@@ -133,11 +159,13 @@ class _NotificationIconButton extends StatefulWidget {
     required this.label,
     required this.icon,
     required this.onPressed,
+    this.visualScale = 1,
   });
 
   final String label;
   final IconData icon;
   final VoidCallback onPressed;
+  final double visualScale;
 
   @override
   State<_NotificationIconButton> createState() =>
@@ -176,20 +204,23 @@ class _NotificationIconButtonState extends State<_NotificationIconButton> {
             duration: MediaQuery.disableAnimationsOf(context)
                 ? Duration.zero
                 : Motion.pill,
-            width: 30,
-            height: 30,
+            width: MobileNotificationMetrics.dismissExtent * widget.visualScale,
+            height:
+                MobileNotificationMetrics.dismissExtent * widget.visualScale,
             decoration: BoxDecoration(
               color: _hovered || _focused
                   ? context.shellColors.surfaceContainerHighest
                   : ShellMediaColors.transparentDark,
-              borderRadius: context.shellTheme.borderRadius(11),
+              borderRadius: context.shellTheme.borderRadius(
+                MobileNotificationMetrics.dismissRadius * widget.visualScale,
+              ),
               border: _focused
                   ? Border.all(color: ShellTheme.of(context).accent)
                   : null,
             ),
             child: Icon(
               widget.icon,
-              size: 17,
+              size: MobileNotificationMetrics.dismissIcon * widget.visualScale,
               color: context.shellColors.textSecondary,
             ),
           ),

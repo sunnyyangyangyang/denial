@@ -35,13 +35,13 @@ final shellFrameTimingOptionsProvider = Provider<ShellFrameTimingOptions>((
   ref,
 ) {
   final environment = ref.watch(startupEnvironmentProvider);
-  final showOverlay = environment.flag('DENIA_FRAME_TIMING_OVERLAY');
+  final showOverlay = environment.flag('DENIAL_FRAME_TIMING_OVERLAY');
   return ShellFrameTimingOptions(
     showOverlay: showOverlay,
     showImportedTextureCharts:
         showOverlay &&
         environment.flag(
-          'DENIA_IMPORTED_FRAME_TIMING_OVERLAY',
+          'DENIAL_IMPORTED_FRAME_TIMING_OVERLAY',
           defaultValue: true,
         ),
   );
