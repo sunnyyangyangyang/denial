@@ -47,6 +47,14 @@ fn session_activation_environment(
                 .to_owned(),
         );
     }
+    #[cfg(feature = "flutter")]
+    if let Some(cursor_environment) = crate::xcursor_sentinel::environment() {
+        environment.extend(
+            cursor_environment
+                .into_iter()
+                .map(|(name, value)| (name, value.to_owned())),
+        );
+    }
     Ok(environment)
 }
 

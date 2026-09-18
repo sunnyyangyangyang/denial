@@ -292,6 +292,11 @@ class _SystemBarCard extends StatelessWidget {
     return ShellBackdropBlur(
       blur: theme.effectiveCardOpacity < 1.0,
       borderRadius: radius,
+      // The bar often lands on fractional physical pixels at scaled output
+      // factors. Preserve the wallpaper beneath the rounded clip's
+      // antialiasing fringe instead of replacing partial coverage with the
+      // filter layer's transparent black.
+      blendMode: BlendMode.srcOver,
       child: AnimatedContainer(
         duration: Motion.wallpaperReveal,
         curve: Motion.standard,

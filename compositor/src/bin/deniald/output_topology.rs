@@ -283,9 +283,16 @@ pub(super) fn output_control_state(
         let (logical_width, logical_height) = fallback_mode.map_or((0, 0), |mode| {
             logical_size_for_control(mode, scale_120, transform)
         });
+        // Output control speaks in persistent layout coordinates. The live
+        // topology is rebased independently, so publishing `spec.position`
+        // first would turn that transient origin shift into configuration the
+        // next time Settings applies an otherwise unchanged request.
         let position = placement.resolve(
-            spec.map(|output| output.position)
-                .or_else(|| configuration.positions.get(&name).copied()),
+            configuration
+                .positions
+                .get(&name)
+                .copied()
+                .or_else(|| spec.map(|output| output.position)),
         );
         placement.include(position, i32::try_from(logical_width)?)?;
         let (physical_width_mm, physical_height_mm) = connector
@@ -843,7 +850,35 @@ fn output_specs(
         specs.push(spec);
     }
 
+    normalize_live_output_positions(&mut specs)?;
     Ok(specs)
+}
+
+/// Rebase only the connected, in-memory layout to a non-negative origin.
+///
+/// Persistent connector coordinates remain in `RuntimeOutputConfiguration`.
+/// Recomputing this projection after every connector scan therefore removes
+/// empty Xwayland root space while restoring the configured relative layout
+/// when an absent output reconnects.
+fn normalize_live_output_positions(outputs: &mut [OutputSpec]) -> Result<(), Box<dyn Error>> {
+    let Some(origin_x) = outputs.iter().map(|output| output.position.x).min() else {
+        return Ok(());
+    };
+    let origin_y = outputs
+        .iter()
+        .map(|output| output.position.y)
+        .min()
+        .expect("a non-empty output layout has a vertical origin");
+
+    for output in outputs {
+        output.position = LogicalPoint::new(
+            i32::try_from(i64::from(output.position.x) - i64::from(origin_x))
+                .map_err(|_| "output layout X normalization overflow")?,
+            i32::try_from(i64::from(output.position.y) - i64::from(origin_y))
+                .map_err(|_| "output layout Y normalization overflow")?,
+        );
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -868,5 +903,90 @@ impl HorizontalOutputPlacement {
                 .ok_or("output layout overflow")?,
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn output(name: &str, position: LogicalPoint, mode: PixelSize, scale_120: u32) -> OutputSpec {
+        OutputSpec {
+            id: OutputId(name.bytes().map(u64::from).sum()),
+            name: name.to_owned(),
+            position,
+            mode,
+            scale_120,
+            refresh_millihz: 60_000,
+            transform: OutputTransform::Normal,
+        }
+    }
+
+    #[test]
+    fn lone_connected_output_is_rebased_without_mutating_stored_coordinates() {
+        let stored = output(
+            "eDP-1",
+            LogicalPoint::new(1_375, 2_400),
+            PixelSize::new(2_560, 1_600),
+            180,
+        );
+        let mut live = vec![stored.clone()];
+
+        normalize_live_output_positions(&mut live).unwrap();
+
+        assert_eq!(live[0].position, LogicalPoint::new(0, 0));
+        assert_eq!(stored.position, LogicalPoint::new(1_375, 2_400));
+    }
+
+    #[test]
+    fn connected_layout_keeps_relative_placement_after_rebase() {
+        let mut live = vec![
+            output(
+                "DP-3",
+                LogicalPoint::new(1_375, 1_200),
+                PixelSize::new(3_840, 2_400),
+                240,
+            ),
+            output(
+                "eDP-1",
+                LogicalPoint::new(1_375, 2_400),
+                PixelSize::new(2_560, 1_600),
+                180,
+            ),
+        ];
+
+        normalize_live_output_positions(&mut live).unwrap();
+
+        assert_eq!(live[0].position, LogicalPoint::new(0, 0));
+        assert_eq!(live[1].position, LogicalPoint::new(0, 1_200));
+    }
+
+    #[test]
+    fn reconnect_recomputes_from_persistent_coordinates() {
+        let configured = vec![
+            output(
+                "DP-3",
+                LogicalPoint::new(1_375, 1_200),
+                PixelSize::new(3_840, 2_400),
+                240,
+            ),
+            output(
+                "eDP-1",
+                LogicalPoint::new(1_375, 2_400),
+                PixelSize::new(2_560, 1_600),
+                180,
+            ),
+        ];
+        let mut panel_only = vec![configured[1].clone()];
+        normalize_live_output_positions(&mut panel_only).unwrap();
+        assert_eq!(panel_only[0].position, LogicalPoint::new(0, 0));
+
+        let mut reconnected = configured.clone();
+        normalize_live_output_positions(&mut reconnected).unwrap();
+
+        assert_eq!(reconnected[0].position, LogicalPoint::new(0, 0));
+        assert_eq!(reconnected[1].position, LogicalPoint::new(0, 1_200));
+        assert_eq!(configured[0].position, LogicalPoint::new(1_375, 1_200));
+        assert_eq!(configured[1].position, LogicalPoint::new(1_375, 2_400));
     }
 }

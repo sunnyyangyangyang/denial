@@ -1,5 +1,6 @@
 //! Client-owned Wayland input dispatch.
 
+use super::super::focus::{clear_keyboard_focus, request_keyboard_focus};
 use super::flutter_route::{
     pointer_constraint_blocks_motion, pointer_constraint_reactivation_suppressed,
     process_wayland_keyboard_transition, route_pointer_axis,
@@ -176,21 +177,19 @@ pub(super) fn process_wayland_input_event(
                         .as_ref()
                         .expect("missing Wayland frontend")
                         .keyboard_focus_for_window(&window);
-                    let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-                    frontend.raise_window(&window, true);
-                    for candidate in frontend.space.elements() {
-                        let changed = candidate.set_activated(candidate == &window);
-                        if changed && let Some(toplevel) = candidate.toplevel() {
-                            toplevel.send_pending_configure();
+                    if let Some(focus) = focus {
+                        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+                        frontend.raise_window(&window, true);
+                        for candidate in frontend.space.elements() {
+                            let changed = candidate.set_activated(candidate == &window);
+                            if changed && let Some(toplevel) = candidate.toplevel() {
+                                toplevel.send_pending_configure();
+                            }
                         }
+                        request_keyboard_focus(state, &keyboard, Some(focus), serial);
                     }
-                    keyboard.set_focus(state, focus, serial);
                 } else {
-                    keyboard.set_focus(
-                        state,
-                        Option::<super::super::KeyboardFocusTarget>::None,
-                        serial,
-                    );
+                    clear_keyboard_focus(state, &keyboard, serial);
                 }
             }
 
@@ -245,21 +244,19 @@ pub(super) fn process_wayland_input_event(
                     .as_ref()
                     .expect("missing Wayland frontend")
                     .keyboard_focus_for_window(&window);
-                let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-                frontend.raise_window(&window, true);
-                for candidate in frontend.space.elements() {
-                    let changed = candidate.set_activated(candidate == &window);
-                    if changed && let Some(toplevel) = candidate.toplevel() {
-                        toplevel.send_pending_configure();
+                if let Some(focus) = focus {
+                    let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+                    frontend.raise_window(&window, true);
+                    for candidate in frontend.space.elements() {
+                        let changed = candidate.set_activated(candidate == &window);
+                        if changed && let Some(toplevel) = candidate.toplevel() {
+                            toplevel.send_pending_configure();
+                        }
                     }
+                    request_keyboard_focus(state, &keyboard, Some(focus), serial);
                 }
-                keyboard.set_focus(state, focus, serial);
             } else {
-                keyboard.set_focus(
-                    state,
-                    Option::<super::super::KeyboardFocusTarget>::None,
-                    serial,
-                );
+                clear_keyboard_focus(state, &keyboard, serial);
             }
 
             let under = state

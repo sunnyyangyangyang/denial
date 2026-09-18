@@ -429,7 +429,12 @@ class DenialWireCodec {
         capabilities.revision <= 0 ||
         !capabilities.scrollSpeedFactor.isFinite ||
         capabilities.scrollSpeedFactor < touchpadScrollSpeedFactorMinimum ||
-        capabilities.scrollSpeedFactor > touchpadScrollSpeedFactorMaximum) {
+        capabilities.scrollSpeedFactor > touchpadScrollSpeedFactorMaximum ||
+        !capabilities.scrollingLayoutSwipeSpeedFactor.isFinite ||
+        capabilities.scrollingLayoutSwipeSpeedFactor <
+            touchpadScrollingLayoutSwipeSpeedFactorMinimum ||
+        capabilities.scrollingLayoutSwipeSpeedFactor >
+            touchpadScrollingLayoutSwipeSpeedFactorMaximum) {
       return null;
     }
     return _encodeEnvelope(
@@ -441,6 +446,8 @@ class DenialWireCodec {
           tapToClickEnabled: capabilities.tapToClickEnabled,
           naturalScrollEnabled: capabilities.naturalScrollEnabled,
           scrollSpeedFactor: capabilities.scrollSpeedFactor,
+          scrollingLayoutSwipeSpeedFactor:
+              capabilities.scrollingLayoutSwipeSpeedFactor,
         ),
       ),
       requestId: requestId,
@@ -552,6 +559,8 @@ class DenialWireCodec {
     final touchpad = inputDevices?.touchpad;
     final mouse = inputDevices?.mouse;
     final scrollSpeedFactor = touchpad?.scrollSpeedFactor;
+    final scrollingLayoutSwipeSpeedFactor =
+        touchpad?.scrollingLayoutSwipeSpeedFactor;
     final mouseSpeed = mouse?.speed;
     if (!response.success ||
         response.kind != generated.SettingsResponseKind.InputDevices ||
@@ -560,10 +569,16 @@ class DenialWireCodec {
         touchpad == null ||
         mouse == null ||
         scrollSpeedFactor == null ||
+        scrollingLayoutSwipeSpeedFactor == null ||
         mouseSpeed == null ||
         !scrollSpeedFactor.isFinite ||
         scrollSpeedFactor < touchpadScrollSpeedFactorMinimum ||
         scrollSpeedFactor > touchpadScrollSpeedFactorMaximum ||
+        !scrollingLayoutSwipeSpeedFactor.isFinite ||
+        scrollingLayoutSwipeSpeedFactor <
+            touchpadScrollingLayoutSwipeSpeedFactorMinimum ||
+        scrollingLayoutSwipeSpeedFactor >
+            touchpadScrollingLayoutSwipeSpeedFactorMaximum ||
         !mouseSpeed.isFinite ||
         mouseSpeed < mouseSpeedMinimum ||
         mouseSpeed > mouseSpeedMaximum) {
@@ -578,6 +593,7 @@ class DenialWireCodec {
       tapToClickEnabled: touchpad.tapToClickEnabled,
       naturalScrollEnabled: touchpad.naturalScrollEnabled,
       scrollSpeedFactor: scrollSpeedFactor,
+      scrollingLayoutSwipeSpeedFactor: scrollingLayoutSwipeSpeedFactor,
     );
   }
 
@@ -1323,6 +1339,14 @@ class DenialWireCodec {
           DenialWindowContentKind.surfaceTree,
         generated.WindowContentKind.LocalFlutter =>
           DenialWindowContentKind.localFlutter,
+        generated.WindowContentKind.LayerShellBackground =>
+          DenialWindowContentKind.layerShellBackground,
+        generated.WindowContentKind.LayerShellBottom =>
+          DenialWindowContentKind.layerShellBottom,
+        generated.WindowContentKind.LayerShellTop =>
+          DenialWindowContentKind.layerShellTop,
+        generated.WindowContentKind.LayerShellOverlay =>
+          DenialWindowContentKind.layerShellOverlay,
       };
       if (contentKind == DenialWindowContentKind.localFlutter &&
           (window.textureId != 0 || sourceLayers.isNotEmpty)) {
@@ -1402,6 +1426,8 @@ class DenialWireCodec {
           monitorId: window.monitorId,
           workspaceId: window.workspaceId,
           minimized: window.minimized,
+          fullscreen: window.fullscreen,
+          maximized: window.maximized,
           transform: window.transform,
           scale120: window.scale120,
           pinned: window.pinned,

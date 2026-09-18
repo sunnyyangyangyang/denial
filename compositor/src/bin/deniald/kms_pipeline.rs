@@ -1,12 +1,11 @@
 //! Atomic hotplug planning, scanout reconciliation, commit, and rollback.
 
-use super::kms_render::{
-    current_scanout_state, render_blank_output_swapchains, render_diagnostic_atlas,
-};
+#[cfg(feature = "flutter")]
+use super::kms_render::render_blank_output_swapchains;
+use super::kms_render::{current_scanout_state, render_diagnostic_atlas};
 use super::kms_session::{ScanoutFramebufferSource, service_session_lifecycle};
 use super::*;
 
-#[cfg(feature = "flutter")]
 pub(super) struct HotplugRequest<'a, 'event_loop> {
     pub(super) renderer: &'a mut GlesRenderer,
     pub(super) allocator: &'a mut ScanoutAllocator,
@@ -20,11 +19,12 @@ pub(super) struct HotplugRequest<'a, 'event_loop> {
     pub(super) frame_number: u64,
     pub(super) event_loop: &'a mut EventLoop<'event_loop, RuntimeState>,
     pub(super) events: &'a mut RuntimeState,
+    #[cfg(feature = "flutter")]
     pub(super) flutter: &'a mut Option<flutter_runtime::FlutterRuntime>,
+    #[cfg(feature = "flutter")]
     pub(super) flutter_launcher: Option<&'a mut FlutterLauncher>,
 }
 
-#[cfg(feature = "flutter")]
 pub(super) fn apply_hotplug_topology(
     request: HotplugRequest<'_, '_>,
 ) -> Result<(), Box<dyn Error>> {
@@ -41,12 +41,15 @@ pub(super) fn apply_hotplug_topology(
         frame_number,
         event_loop,
         events,
+        #[cfg(feature = "flutter")]
         flutter,
+        #[cfg(feature = "flutter")]
         mut flutter_launcher,
     } = request;
     if outputs.is_empty() {
         return Err("all DRM outputs were disconnected during the frame loop".into());
     }
+    #[cfg(feature = "flutter")]
     if flutter.is_some() && flutter_launcher.is_none() {
         return Err("dynamic Flutter topology has no launcher".into());
     }
@@ -116,6 +119,7 @@ pub(super) fn apply_hotplug_topology(
     // Prepare every buffer while the old engine and both pools are live.
     // Keep the actual EGL contexts/FBOs: recreating a validated target after
     // shutdown can fail. Rollback needs its own unstarted renderer as well.
+    #[cfg(feature = "flutter")]
     let (mut prepared, mut rollback_prepared) = if flutter.is_some() {
         let preparation = (|| -> Result<_, Box<dyn Error>> {
             let launcher = flutter_launcher.as_deref().unwrap();
@@ -248,156 +252,218 @@ pub(super) fn apply_hotplug_topology(
     progress.mark_presented();
 
     #[cfg(feature = "flutter")]
-    let restart_flutter = if flutter.is_some() {
-        // Shut the old engine down while both its GBM pool and the reversible
-        // scanout journal are still alive. From this point onward replacing or
-        // unwinding the pool can no longer race EGLImage/target destruction.
-        let Some(mut old_runtime) = flutter.take() else {
-            return Err("Flutter runtime disappeared during topology restart".into());
-        };
-        let prepare_restart = (|| -> Result<(), Box<dyn Error>> {
-            old_runtime.process_events(events.flutter_events.drain(..))?;
-            if let Some(launcher) = flutter_launcher.as_deref_mut()
-                && launcher.synchronize_ui_development(&mut old_runtime)?
-            {
-                events.flutter_reload_requested = true;
+    {
+        let restart_flutter = if flutter.is_some() {
+            // Shut the old engine down while both its GBM pool and the reversible
+            // scanout journal are still alive. From this point onward replacing or
+            // unwinding the pool can no longer race EGLImage/target destruction.
+            let Some(mut old_runtime) = flutter.take() else {
+                return Err("Flutter runtime disappeared during topology restart".into());
+            };
+            let prepare_restart = (|| -> Result<(), Box<dyn Error>> {
+                old_runtime.process_events(events.flutter_events.drain(..))?;
+                if let Some(launcher) = flutter_launcher.as_deref_mut()
+                    && launcher.synchronize_ui_development(&mut old_runtime)?
+                {
+                    events.flutter_reload_requested = true;
+                }
+                synchronize_authentication_boundary(events);
+                synchronize_clipboard(&mut old_runtime, events)?;
+                synchronize_system_control_events(&mut old_runtime, events)?;
+                synchronize_shell_keyboard(&mut old_runtime, events)?;
+                synchronize_settings(&mut old_runtime, events)?;
+                synchronize_system_bar_configuration(
+                    &mut old_runtime,
+                    events,
+                    flutter_launcher.as_deref_mut(),
+                );
+                synchronize_flutter_window_management(&mut old_runtime, events)?;
+                synchronize_flutter_input_layout(&mut old_runtime, events)?;
+                Ok(())
+            })();
+            if let Err(error) = prepare_restart {
+                *flutter = Some(old_runtime);
+                let failures = rollback_hotplug_scanouts(
+                    reconciliation,
+                    &old_framebuffers,
+                    &mut progress,
+                    events,
+                );
+                return Err(hotplug_transaction_error(
+                    format!("Flutter pre-restart drain failed: {error}"),
+                    failures,
+                ));
             }
-            synchronize_authentication_boundary(events);
-            synchronize_clipboard(&mut old_runtime, events)?;
-            synchronize_system_control_events(&mut old_runtime, events)?;
-            synchronize_shell_keyboard(&mut old_runtime, events)?;
-            synchronize_settings(&mut old_runtime, events)?;
-            synchronize_system_bar_configuration(
-                &mut old_runtime,
-                events,
-                flutter_launcher.as_deref_mut(),
-            );
-            synchronize_flutter_window_management(&mut old_runtime, events)?;
-            synchronize_flutter_input_layout(&mut old_runtime, events)?;
-            Ok(())
-        })();
-        if let Err(error) = prepare_restart {
-            *flutter = Some(old_runtime);
-            let failures =
-                rollback_hotplug_scanouts(reconciliation, &old_framebuffers, &mut progress, events);
-            return Err(hotplug_transaction_error(
-                format!("Flutter pre-restart drain failed: {error}"),
-                failures,
-            ));
-        }
-        let shutdown = old_runtime.shutdown();
-        events.flutter_events.clear();
-        if let Err(error) = shutdown {
-            // A failed engine shutdown can retain workers and their resources;
-            // starting another engine is not safe in that case.
-            let failures =
-                rollback_hotplug_scanouts(reconciliation, &old_framebuffers, &mut progress, events);
-            return Err(hotplug_transaction_error(
-                format!("Flutter shutdown before restart failed: {error}"),
-                failures,
-            ));
-        }
-        true
-    } else {
-        false
-    };
-
-    // Keep the journal and both buffer pools until the replacement engine is
-    // usable. Its prepared renderer already owns the validated EGL imports.
-    let replacement = (|| -> Result<Option<flutter_runtime::FlutterRuntime>, Box<dyn Error>> {
-        let failures = reconciliation.clear_retired();
-        if !failures.is_empty() {
-            return Err(format!("failed to disable retired CRTCs: {}", failures.join("; ")).into());
-        }
-        if let Some(frontend) = events.wayland.as_mut() {
-            frontend
-                .update_topology(&snapshot)
-                .map_err(|error| format!("Wayland topology publication failed: {error}"))?;
-        }
-        if restart_flutter {
-            let launcher = flutter_launcher.as_deref_mut().unwrap();
-            let runtime = launcher.start_with_targets(
-                renderer,
-                staged
-                    .outputs()
-                    .ok_or("reconfigured Flutter topology has no physical output pools")?,
-                reconciliation.scanouts(),
-                &snapshot,
-                &atlas,
-                Some(
-                    prepared
-                        .take()
-                        .ok_or("replacement Flutter renderer was not prepared")?,
-                ),
-            )?;
-            Ok(Some(runtime))
+            let shutdown = old_runtime.shutdown();
+            events.flutter_events.clear();
+            if let Err(error) = shutdown {
+                // A failed engine shutdown can retain workers and their resources;
+                // starting another engine is not safe in that case.
+                let failures = rollback_hotplug_scanouts(
+                    reconciliation,
+                    &old_framebuffers,
+                    &mut progress,
+                    events,
+                );
+                return Err(hotplug_transaction_error(
+                    format!("Flutter shutdown before restart failed: {error}"),
+                    failures,
+                ));
+            }
+            true
         } else {
-            Ok(None)
+            false
+        };
+
+        // Keep the journal and both buffer pools until the replacement engine is
+        // usable. Its prepared renderer already owns the validated EGL imports.
+        let replacement =
+            (|| -> Result<Option<flutter_runtime::FlutterRuntime>, Box<dyn Error>> {
+                let failures = reconciliation.clear_retired();
+                if !failures.is_empty() {
+                    return Err(format!(
+                        "failed to disable retired CRTCs: {}",
+                        failures.join("; ")
+                    )
+                    .into());
+                }
+                if let Some(frontend) = events.wayland.as_mut() {
+                    frontend
+                        .update_topology(&snapshot)
+                        .map_err(|error| format!("Wayland topology publication failed: {error}"))?;
+                }
+                if restart_flutter {
+                    let launcher = flutter_launcher.as_deref_mut().unwrap();
+                    let runtime = launcher.start_with_targets(
+                        renderer,
+                        staged
+                            .outputs()
+                            .ok_or("reconfigured Flutter topology has no physical output pools")?,
+                        reconciliation.scanouts(),
+                        &snapshot,
+                        &atlas,
+                        Some(
+                            prepared
+                                .take()
+                                .ok_or("replacement Flutter renderer was not prepared")?,
+                        ),
+                    )?;
+                    Ok(Some(runtime))
+                } else {
+                    Ok(None)
+                }
+            })();
+        let replacement = match replacement {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let mut failures = rollback_hotplug_scanouts(
+                    reconciliation,
+                    &old_framebuffers,
+                    &mut progress,
+                    events,
+                );
+                if let Some(frontend) = events.wayland.as_mut()
+                    && let Err(error) = frontend.update_topology(&old_snapshot)
+                {
+                    failures.push(format!("Wayland topology rollback failed: {error}"));
+                }
+                if restart_flutter {
+                    let restore =
+                        (|| -> Result<flutter_runtime::FlutterRuntime, Box<dyn Error>> {
+                            let old_atlas = AtlasPlan::for_snapshot(&old_snapshot)
+                                .ok_or("previous Flutter topology has no atlas")?;
+                            flutter_launcher.as_deref_mut().unwrap().start_with_targets(
+                                renderer,
+                                swapchain
+                                    .outputs()
+                                    .ok_or("previous Flutter topology has no output pools")?,
+                                scanouts,
+                                &old_snapshot,
+                                &old_atlas,
+                                Some(
+                                    rollback_prepared
+                                        .take()
+                                        .ok_or("rollback Flutter renderer was not prepared")?,
+                                ),
+                            )
+                        })();
+                    match restore {
+                        Ok(runtime) => {
+                            *flutter = Some(runtime);
+                            events.begin_replacement_flutter_generation(old_size);
+                            warn!(
+                                "restored Flutter on the previous output pools after rejected topology change"
+                            );
+                        }
+                        Err(error) => {
+                            failures.push(format!("Flutter rollback restart failed: {error}"))
+                        }
+                    }
+                }
+                return Err(hotplug_transaction_error(error.to_string(), failures));
+            }
+        };
+
+        let retired_scanouts = reconciliation.commit();
+        *topology = staged_topology;
+        events.output_control_dirty = true;
+        let retired = std::mem::replace(swapchain, staged);
+        if let Some(runtime) = replacement {
+            *flutter = Some(runtime);
+            events.begin_replacement_flutter_generation(swapchain.desktop_size());
+            info!(
+                generation = flutter_launcher.as_deref().unwrap().generation,
+                "restarted Flutter with reconfigured native output pools"
+            );
         }
-    })();
-    let replacement = match replacement {
-        Ok(runtime) => runtime,
-        Err(error) => {
+        progress.mark_finalized();
+        // Release the unused rollback FBOs before retiring their native pool.
+        drop(rollback_prepared);
+        drop(retired_scanouts);
+        drop(retired);
+    }
+
+    #[cfg(not(feature = "flutter"))]
+    {
+        let retired_clear_failures = reconciliation.clear_retired();
+        if !retired_clear_failures.is_empty() {
+            let mut failures =
+                rollback_hotplug_scanouts(reconciliation, &old_framebuffers, &mut progress, events);
+            failures.splice(0..0, retired_clear_failures);
+            return Err(hotplug_transaction_error(
+                "failed to disable retired CRTCs".into(),
+                failures,
+            ));
+        }
+
+        let frontend_error = events
+            .wayland
+            .as_mut()
+            .and_then(|frontend| frontend.update_topology(&snapshot).err())
+            .map(|error| error.to_string());
+        if let Some(error) = frontend_error {
             let mut failures =
                 rollback_hotplug_scanouts(reconciliation, &old_framebuffers, &mut progress, events);
             if let Some(frontend) = events.wayland.as_mut()
-                && let Err(error) = frontend.update_topology(&old_snapshot)
+                && let Err(rollback_error) = frontend.update_topology(&old_snapshot)
             {
-                failures.push(format!("Wayland topology rollback failed: {error}"));
+                failures.push(format!(
+                    "Wayland topology rollback failed: {rollback_error}"
+                ));
             }
-            if restart_flutter {
-                let restore = (|| -> Result<flutter_runtime::FlutterRuntime, Box<dyn Error>> {
-                    let old_atlas = AtlasPlan::for_snapshot(&old_snapshot)
-                        .ok_or("previous Flutter topology has no atlas")?;
-                    flutter_launcher.as_deref_mut().unwrap().start_with_targets(
-                        renderer,
-                        swapchain
-                            .outputs()
-                            .ok_or("previous Flutter topology has no output pools")?,
-                        scanouts,
-                        &old_snapshot,
-                        &old_atlas,
-                        Some(
-                            rollback_prepared
-                                .take()
-                                .ok_or("rollback Flutter renderer was not prepared")?,
-                        ),
-                    )
-                })();
-                match restore {
-                    Ok(runtime) => {
-                        *flutter = Some(runtime);
-                        events.begin_replacement_flutter_generation(old_size);
-                        warn!(
-                            "restored Flutter on the previous output pools after rejected topology change"
-                        );
-                    }
-                    Err(error) => {
-                        failures.push(format!("Flutter rollback restart failed: {error}"))
-                    }
-                }
-            }
-            return Err(hotplug_transaction_error(error.to_string(), failures));
+            return Err(hotplug_transaction_error(
+                format!("Wayland topology publication failed: {error}"),
+                failures,
+            ));
         }
-    };
 
-    let retired_scanouts = reconciliation.commit();
-    *topology = staged_topology;
-    events.output_control_dirty = true;
-    let retired = std::mem::replace(swapchain, staged);
-    if let Some(runtime) = replacement {
-        *flutter = Some(runtime);
-        events.begin_replacement_flutter_generation(swapchain.desktop_size());
-        info!(
-            generation = flutter_launcher.as_deref().unwrap().generation,
-            "restarted Flutter with reconfigured native output pools"
-        );
+        let retired_scanouts = reconciliation.commit();
+        *topology = staged_topology;
+        let retired = std::mem::replace(swapchain, staged);
+        progress.mark_finalized();
+        drop(retired_scanouts);
+        drop(retired);
     }
-    progress.mark_finalized();
-    // Release the unused rollback FBOs before retiring their native pool.
-    drop(rollback_prepared);
-    drop(retired_scanouts);
-    drop(retired);
 
     info!(
         outputs = scanouts.len(),

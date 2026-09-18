@@ -154,6 +154,129 @@ class _NotificationActionButtonState extends State<_NotificationActionButton> {
   }
 }
 
+/// Gives desktop notification cards a bidirectional swipe-to-dismiss gesture
+/// without requiring the card to disappear when the dismissal request fails.
+class DesktopNotificationSwipeDismiss extends StatefulWidget {
+  const DesktopNotificationSwipeDismiss({
+    required this.child,
+    required this.onDismiss,
+    super.key,
+    this.enabled = true,
+  });
+
+  final Widget child;
+  final bool Function() onDismiss;
+  final bool enabled;
+
+  @override
+  State<DesktopNotificationSwipeDismiss> createState() =>
+      _DesktopNotificationSwipeDismissState();
+}
+
+class _DesktopNotificationSwipeDismissState
+    extends State<DesktopNotificationSwipeDismiss> {
+  static const double _distanceThreshold = 0.24;
+  static const double _velocityThreshold = 700;
+
+  double _dragOffset = 0;
+  bool _dragging = false;
+  bool _dismissed = false;
+
+  void _startDrag() {
+    setState(() {
+      _dragging = true;
+      _dragOffset = 0;
+      _dismissed = false;
+    });
+  }
+
+  void _updateDrag(DragUpdateDetails details, double width) {
+    setState(() {
+      _dragOffset = (_dragOffset + (details.primaryDelta ?? 0))
+          .clamp(-width, width)
+          .toDouble();
+    });
+  }
+
+  void _endDrag(DragEndDetails details, double width) {
+    final velocity = details.primaryVelocity ?? 0;
+    final shouldDismiss =
+        _dragOffset.abs() >= width * _distanceThreshold ||
+        velocity.abs() >= _velocityThreshold;
+    final direction = _dragOffset == 0
+        ? (velocity < 0 ? -1.0 : 1.0)
+        : _dragOffset.sign;
+    final dismissed = shouldDismiss && widget.onDismiss();
+    setState(() {
+      _dragging = false;
+      _dismissed = dismissed;
+      _dragOffset = dismissed ? direction * width : 0;
+    });
+  }
+
+  void _cancelDrag() {
+    setState(() {
+      _dragging = false;
+      _dragOffset = 0;
+      _dismissed = false;
+    });
+  }
+
+  void _dismissFromSemantics(double width) {
+    if (!widget.onDismiss()) {
+      return;
+    }
+    setState(() {
+      _dragging = false;
+      _dragOffset = width;
+      _dismissed = true;
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant DesktopNotificationSwipeDismiss oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.enabled && !widget.enabled && !_dismissed) {
+      _dragging = false;
+      _dragOffset = 0;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth > 0 && constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : 1.0;
+        final slide = _dragOffset / width;
+        return Semantics(
+          onDismiss: widget.enabled ? () => _dismissFromSemantics(width) : null,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onHorizontalDragStart: widget.enabled ? (_) => _startDrag() : null,
+            onHorizontalDragUpdate: widget.enabled
+                ? (details) => _updateDrag(details, width)
+                : null,
+            onHorizontalDragEnd: widget.enabled
+                ? (details) => _endDrag(details, width)
+                : null,
+            onHorizontalDragCancel: widget.enabled ? _cancelDrag : null,
+            child: AnimatedSlide(
+              offset: Offset(slide, 0),
+              duration: _dragging || MediaQuery.disableAnimationsOf(context)
+                  ? Duration.zero
+                  : Motion.pill,
+              curve: Motion.standard,
+              child: widget.child,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _NotificationIconButton extends StatefulWidget {
   const _NotificationIconButton({
     required this.label,

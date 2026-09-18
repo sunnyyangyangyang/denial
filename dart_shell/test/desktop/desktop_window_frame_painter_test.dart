@@ -5,29 +5,30 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('rounded frame coverage is one physical pixel wide', () {
+  test('rounded frame keeps a one logical pixel border', () {
     final geometry = desktopRoundedFrameGeometry(
       size: const Size(800, 600),
       radius: 8,
       frameThickness: 1,
-      borderThickness: 0.8,
+      borderThickness: 1,
       devicePixelRatio: 1.25,
     );
 
     expect(geometry.outerRadius, 8);
     expect(geometry.innerRadius, 7);
-    expect(geometry.borderThickness, 0.8);
+    expect(geometry.borderThickness, 1);
     expect(geometry.edgeHalfWidth * 2 * 1.25, closeTo(1, 0.000001));
+    expect(geometry.borderThickness * 1.25, closeTo(1.25, 0.000001));
     expect(geometry.shaderRadius, 8.4);
   });
 
-  test('rounded frame coverage follows each output scale', () {
+  test('only the antialiasing fringe is fixed to one physical pixel', () {
     for (final ratio in <double>[1, 1.25, 1.5, 2]) {
       final geometry = desktopRoundedFrameGeometry(
         size: const Size(800, 600),
         radius: 8,
         frameThickness: 1,
-        borderThickness: 1 / ratio,
+        borderThickness: 1,
         devicePixelRatio: ratio,
       );
 
@@ -37,9 +38,14 @@ void main() {
         reason: 'coverage width at ${ratio}x',
       );
       expect(
+        geometry.borderThickness,
+        1,
+        reason: 'logical border width at ${ratio}x',
+      );
+      expect(
         geometry.borderThickness * ratio,
-        closeTo(1, 0.000001),
-        reason: 'border width at ${ratio}x',
+        closeTo(ratio, 0.000001),
+        reason: 'physical border coverage at ${ratio}x',
       );
     }
   });

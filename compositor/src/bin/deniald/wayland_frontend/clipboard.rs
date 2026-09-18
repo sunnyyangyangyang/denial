@@ -515,7 +515,10 @@ pub(crate) fn apply_clipboard_actions(state: &mut RuntimeState, actions: Vec<Cli
                     warn!(%error, "could not clear retained Xwayland clipboard");
                 }
             }
+            #[cfg(feature = "flutter")]
             ClipboardAction::StartDrag { item_id } => start_retained_drag(state, item_id),
+            #[cfg(not(feature = "flutter"))]
+            ClipboardAction::StartDrag { .. } => {}
         }
     }
 }
@@ -581,6 +584,7 @@ fn paste_into_focused_client(state: &mut RuntimeState) {
     debug!("pasted activated clipboard item into focused client");
 }
 
+#[cfg(feature = "flutter")]
 fn start_retained_drag(state: &mut RuntimeState, item_id: u64) {
     if state.secure_session_locked() || !state.flutter_input.pointer_captured() {
         warn!(
@@ -669,6 +673,8 @@ fn start_retained_drag(state: &mut RuntimeState, item_id: u64) {
 fn focused_source_identity(frontend: &WaylandFrontend) -> Option<ClipboardSourceIdentity> {
     let focus = frontend.seat.get_keyboard()?.current_focus()?;
     match focus {
+        #[cfg(feature = "flutter")]
+        KeyboardFocusTarget::Flutter => None,
         KeyboardFocusTarget::X11(surface) => {
             ClipboardSourceIdentity::bounded(surface.class(), surface.title())
         }

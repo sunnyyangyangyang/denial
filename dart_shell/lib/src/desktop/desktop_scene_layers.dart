@@ -1,5 +1,46 @@
 part of 'desktop_shell.dart';
 
+class _DesktopLayerShellSurface extends StatelessWidget {
+  const _DesktopLayerShellSurface({
+    required this.surface,
+    required this.displayLayout,
+    super.key,
+  });
+
+  final DenialWindow surface;
+  final DisplayLayout? displayLayout;
+
+  @override
+  Widget build(BuildContext context) {
+    final geometry = surface.geometry;
+    if (geometry == null || surface.surfaceLayers.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final outputPixelGrid = desktopOutputPixelGridForMonitor(
+      displayLayout,
+      surface.monitorId,
+    );
+    return Positioned.fromRect(
+      rect: geometry,
+      // InputLayout currently has binary ownership: either Flutter owns a
+      // region or one Wayland client does. Keep desktop-wide layer surfaces
+      // transparent until it can express lower-priority client regions; this
+      // preserves shell widgets and desktop gestures above a wallpaper.
+      child: IgnorePointer(
+        child: RepaintBoundary(
+          child: WindowSurfaceTree(
+            window: surface,
+            includePopups: true,
+            presentationScale: outputPixelGrid?.scale,
+            pixelGridOrigin:
+                outputPixelGrid?.logicalRect.topLeft ?? Offset.zero,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _DesktopPanelEdgeTrigger extends StatelessWidget {
   const _DesktopPanelEdgeTrigger({required this.onEnter, required this.onExit});
 
@@ -254,6 +295,11 @@ class _DesktopPopupSurfaceLayers extends StatelessWidget {
                 desktopOutputPixelGridForMonitor(layout, placement.monitorId),
           ),
         );
+        final windowLayout = ref.watch(
+          shellSettingsProvider.select(
+            (settings) => settings.layout.windowLayout,
+          ),
+        );
         final devicePixelRatio =
             outputPixelGrid?.scale ?? MediaQuery.devicePixelRatioOf(context);
         final pixelGridOrigin =
@@ -266,6 +312,12 @@ class _DesktopPopupSurfaceLayers extends StatelessWidget {
               )
             : this.frame;
         final transformed = overview || switching || offscreenMinimized;
+        final scrollingOutputClip = desktopScrollingOutputClip(
+          windowLayout: windowLayout,
+          pinned: window.pinned,
+          transformed: transformed,
+          outputRect: outputPixelGrid?.logicalRect,
+        );
         final frame = desktopPixelAlignedWindowFrame(
           frame: liveFrame,
           contentInset: placement.frameBorder,
@@ -331,6 +383,7 @@ class _DesktopPopupSurfaceLayers extends StatelessWidget {
                         pixelGridScale: devicePixelRatio,
                         pixelGridOrigin: pixelGridOrigin,
                         alignSizeToDevicePixels: true,
+                        globalClipRect: scrollingOutputClip,
                         child: ShellBackdropBlur(
                           blur: !layer.opaque || layer.opacity < 1.0,
                           useWindowAlphaThreshold: true,

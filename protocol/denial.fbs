@@ -15,7 +15,11 @@ enum ObjectKind : ubyte {
 // by the embedded Dart shell instead of sampled from a client surface tree.
 enum WindowContentKind : ubyte {
   SurfaceTree = 0,
-  LocalFlutter = 1
+  LocalFlutter = 1,
+  LayerShellBackground = 2,
+  LayerShellBottom = 3,
+  LayerShellTop = 4,
+  LayerShellOverlay = 5
 }
 
 // SurfaceLayer describes one node of the ordered surface tree belonging to a
@@ -65,7 +69,10 @@ enum WindowActionKind : ubyte {
   Maximize = 1,
   Restore = 2,
   ToggleMaximize = 3,
-  ToggleFullscreen = 4
+  ToggleFullscreen = 4,
+  // Idempotent native state publication. ToggleFullscreen remains for local
+  // Flutter windows and compatibility with older senders.
+  Fullscreen = 5
 }
 
 enum ShellActionKind : ubyte {
@@ -82,7 +89,11 @@ enum ShellActionKind : ubyte {
   WindowSwitcherPrevious = 10,
   OpenSettings = 11,
   Dashboard = 12,
-  WorkspaceChanged = 13
+  WorkspaceChanged = 13,
+  FocusLeft = 14,
+  FocusRight = 15,
+  FocusUp = 16,
+  FocusDown = 17
 }
 
 enum KeyboardCommandKind : ubyte {
@@ -368,7 +379,8 @@ table Window {
   opacity:float = 1.0;
   // Appended for wire compatibility. SurfaceTree preserves the existing
   // Wayland/X11 behavior; LocalFlutter selects a trusted in-bundle app by
-  // app_id and never treats texture_id == 0 as its discriminator.
+  // app_id and never treats texture_id == 0 as its discriminator. LayerShell
+  // variants are compositor scene planes and are never managed as windows.
   content_kind:WindowContentKind = SurfaceTree;
   // Appended for wire compatibility. Older senders conservatively default to
   // content translucency, preserving the previous blur behavior.
@@ -377,6 +389,10 @@ table Window {
   // -1 because minimization is a workspace-less state.
   workspace_id:long = 1;
   minimized:bool;
+  // Effective compositor-owned presentation state. These fields are the
+  // authoritative repair path if an incremental action is delayed or lost.
+  fullscreen:bool;
+  maximized:bool;
 }
 
 table WindowSnapshot {
@@ -604,6 +620,7 @@ table TouchpadConfiguration {
   tap_to_click_enabled:bool = true;
   natural_scroll_enabled:bool;
   scroll_speed_factor:double = 1.0;
+  scrolling_layout_swipe_speed_factor:double = 1.0;
 }
 
 table MouseConfiguration {

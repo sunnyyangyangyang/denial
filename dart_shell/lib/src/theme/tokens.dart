@@ -81,6 +81,8 @@ abstract final class ShellRadii {
 /// [ShellTextTheme] applies semantic foreground colors. Keeping these
 /// prototypes colorless lets text inherit the active shell foreground when a
 /// specialized resolved style is unnecessary.
+const int maximumShellFontFamilyLength = 128;
+
 abstract final class ShellText {
   /// Monospace family bundled for the system bar so ticking values keep a
   /// fixed advance; the rest of the shell stays on the default family.

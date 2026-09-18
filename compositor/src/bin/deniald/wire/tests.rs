@@ -609,6 +609,17 @@ fn encodes_atomic_cursor_states_and_rejects_invalid_values_without_sequence_gaps
 }
 
 #[test]
+fn validates_cursor_payload_before_runtime_assigns_its_epoch() {
+    let pending = CursorStateDescription::named("pointer");
+    assert_eq!(pending.epoch, 0);
+    assert!(super::validate_cursor_state_payload(&pending).is_ok());
+    assert!(matches!(
+        super::validate_cursor_state(&pending),
+        Err(WireError::Geometry)
+    ));
+}
+
+#[test]
 fn malformed_truncated_and_mutated_corpus_never_panics() {
     fn exercise(bytes: &[u8]) {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

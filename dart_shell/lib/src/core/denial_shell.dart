@@ -95,6 +95,7 @@ class DenialShell extends ConsumerWidget {
     final theme = ShellThemeData(
       colors: colors,
       accent: accent,
+      fontFamily: appearance.fontFamily,
       cornerRadiusScale: appearance.cornerRadiusScale,
       panelOpacity: appearance.panelOpacity,
       cardOpacity: appearance.cardOpacity,

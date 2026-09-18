@@ -100,6 +100,7 @@ class ShellThemeData {
   const ShellThemeData({
     this.colors = ShellColorScheme.dark,
     Color accent = ShellBrandColors.defaultAccent,
+    this.fontFamily = '',
     this.cornerRadiusScale = ShellRoundness.normal,
     this.panelOpacity = ShellOpacity.panel,
     this.cardOpacity = ShellOpacity.card,
@@ -117,6 +118,7 @@ class ShellThemeData {
 
   final ShellColorScheme colors;
   final Color accentSeed;
+  final String fontFamily;
   final ShellTextTheme? _resolvedTextTheme;
   final ShellAccentPalette? _resolvedAccentPalette;
   final ColorScheme? _resolvedGeneratedColorScheme;
@@ -217,6 +219,7 @@ class ShellThemeData {
   ShellThemeData copyWith({
     ShellColorScheme? colors,
     Color? accent,
+    String? fontFamily,
     double? cornerRadiusScale,
     double? panelOpacity,
     double? cardOpacity,
@@ -231,6 +234,7 @@ class ShellThemeData {
     return ShellThemeData(
       colors: colors ?? this.colors,
       accent: accent ?? accentSeed,
+      fontFamily: fontFamily ?? this.fontFamily,
       cornerRadiusScale: cornerRadiusScale ?? this.cornerRadiusScale,
       panelOpacity: panelOpacity ?? this.panelOpacity,
       cardOpacity: cardOpacity ?? this.cardOpacity,
@@ -260,6 +264,7 @@ class ShellThemeData {
     }
     final colorsMatch = first.colors == second.colors;
     final accentsMatch = first.accentSeed == second.accentSeed;
+    final fontsMatch = first.fontFamily == second.fontFamily;
     final colorInputsMatch = colorsMatch && accentsMatch;
     double blend(double a, double b) => a + (b - a) * t;
     return ShellThemeData(
@@ -269,7 +274,8 @@ class ShellThemeData {
       accent: accentsMatch
           ? first.accentSeed
           : Color.lerp(first.accentSeed, second.accentSeed, t)!,
-      resolvedTextTheme: colorsMatch
+      fontFamily: t < 0.5 ? first.fontFamily : second.fontFamily,
+      resolvedTextTheme: colorsMatch && fontsMatch
           ? first.text
           : ShellTextTheme.lerp(first.text, second.text, t),
       resolvedAccentPalette: colorInputsMatch
@@ -322,6 +328,7 @@ class ShellThemeData {
     return other is ShellThemeData &&
         other.colors == colors &&
         other.accentSeed == accentSeed &&
+        other.fontFamily == fontFamily &&
         other.cornerRadiusScale == cornerRadiusScale &&
         other.panelOpacity == panelOpacity &&
         other.cardOpacity == cardOpacity &&
@@ -338,6 +345,7 @@ class ShellThemeData {
   int get hashCode => Object.hash(
     colors,
     accentSeed,
+    fontFamily,
     cornerRadiusScale,
     panelOpacity,
     cardOpacity,
@@ -423,7 +431,8 @@ class _ShellThemeResolution {
       );
 
   late final ShellTextTheme text =
-      theme._resolvedTextTheme ?? ShellTextTheme.from(theme.colors);
+      theme._resolvedTextTheme ??
+      ShellTextTheme.from(theme.colors, fontFamily: theme.fontFamily);
 
   late final ColorScheme generatedColorScheme =
       theme._resolvedGeneratedColorScheme ??
@@ -509,6 +518,7 @@ class _ShellThemeResolution {
   late final ThemeData materialTheme = ThemeData(
     brightness: theme.brightness,
     useMaterial3: true,
+    fontFamily: theme.fontFamily.isEmpty ? null : theme.fontFamily,
     scaffoldBackgroundColor: ShellMediaColors.transparentDark,
     colorScheme: generatedColorScheme.copyWith(
       surface: theme.colors.background,

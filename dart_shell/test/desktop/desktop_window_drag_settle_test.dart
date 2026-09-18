@@ -111,4 +111,57 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(tester.getRect(find.byKey(childKey)), destination);
   });
+
+  testWidgets('keeps a scene-space clip fixed while the window moves', (
+    tester,
+  ) async {
+    const childKey = ValueKey<String>('clipped-window');
+    const clipRect = Rect.fromLTWH(100, 0, 100, 100);
+
+    Widget scene(Rect rect) {
+      return Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
+          width: 300,
+          height: 100,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              RetainedAnimatedPositioned(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.linear,
+                rect: rect,
+                globalClipRect: clipRect,
+                child: const ColoredBox(
+                  key: childKey,
+                  color: Color(0xff000000),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    await tester.pumpWidget(scene(const Rect.fromLTWH(50, 0, 100, 100)));
+    var clipRectWidget = tester.widget<ClipRect>(find.byType(ClipRect));
+    expect(
+      clipRectWidget.clipper!.getClip(const Size(100, 100)),
+      const Rect.fromLTWH(50, 0, 100, 100),
+    );
+
+    await tester.pumpWidget(scene(const Rect.fromLTWH(150, 0, 100, 100)));
+    clipRectWidget = tester.widget<ClipRect>(find.byType(ClipRect));
+    expect(
+      clipRectWidget.clipper!.getClip(const Size(100, 100)),
+      const Rect.fromLTWH(-50, 0, 100, 100),
+    );
+
+    await tester.pump(const Duration(milliseconds: 100));
+    clipRectWidget = tester.widget<ClipRect>(find.byType(ClipRect));
+    expect(
+      clipRectWidget.clipper!.getClip(const Size(100, 100)),
+      const Rect.fromLTWH(-50, 0, 100, 100),
+    );
+  });
 }

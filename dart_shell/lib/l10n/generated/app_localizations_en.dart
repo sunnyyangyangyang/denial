@@ -1354,6 +1354,32 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsAutomaticIdleTitle => 'Automatic idle actions';
 
   @override
+  String get settingsPowerButtonTitle => 'Power button';
+
+  @override
+  String get settingsPowerButtonAction => 'Action';
+
+  @override
+  String get settingsPowerButtonDescription =>
+      'Choose what happens when you press the physical power button.';
+
+  @override
+  String get settingsPowerButtonSuspend => 'Suspend';
+
+  @override
+  String get settingsPowerButtonHibernate => 'Hibernate';
+
+  @override
+  String get settingsPowerButtonHibernateUnavailable =>
+      'Hibernate (unavailable)';
+
+  @override
+  String get settingsPowerButtonDpms => 'Turn off displays (DPMS)';
+
+  @override
+  String get settingsPowerButtonPowerOff => 'Power off';
+
+  @override
   String get settingsAutomaticLockToggle => 'Lock automatically';
 
   @override
@@ -1591,6 +1617,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsTransparencyTitle => 'Transparency material';
+
+  @override
+  String get settingsTypographyTitle => 'Typography';
 
   @override
   String get settingsTransparencyOff => 'Off';
@@ -1963,6 +1992,19 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsFocusedWindows => 'Focused windows';
 
   @override
+  String get settingsFontCatalogLoading => 'Finding installed fonts…';
+
+  @override
+  String get settingsFontDescription =>
+      'Use the system default or an installed font across the Denial shell.';
+
+  @override
+  String get settingsFontFamily => 'Font family';
+
+  @override
+  String get settingsFontSystemDefault => 'System default';
+
+  @override
   String get settingsFocusedWindowBorder =>
       'Highlight the focused window border';
 
@@ -2127,6 +2169,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsTouchpadScrollSpeed => 'Finger scroll speed';
+
+  @override
+  String get settingsTouchpadScrollingLayoutSwipeSpeed =>
+      'Scrolling layout swipe speed';
 
   @override
   String get settingsMousePointerSpeed => 'Mouse pointer speed';
@@ -2498,7 +2544,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsWindowLayoutDescription =>
-      'Stacking lets windows overlap. Tiling divides the desktop dynamically. Scrolling arranges full-height columns in a focus-following horizontal strip.';
+      'Stacking lets windows overlap. Tiling divides the desktop dynamically. Scrolling follows focus along a strip that turns vertical with a quarter-turned monitor.';
 
   @override
   String get settingsWindowLayoutDwindle => 'Tiling';

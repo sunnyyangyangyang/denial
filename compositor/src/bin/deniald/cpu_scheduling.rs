@@ -717,10 +717,17 @@ fn set_scheduler(tid: libc::pid_t, policy: libc::c_int, priority: libc::c_int) -
     }
 }
 
+fn scheduler_parameters(priority: libc::c_int) -> libc::sched_param {
+    // SAFETY: sched_param is plain old data. An all-zero value is a valid
+    // schedule specification on every supported libc, including musl's
+    // extended SCHED_SPORADIC layout.
+    let mut parameters: libc::sched_param = unsafe { std::mem::zeroed() };
+    parameters.sched_priority = priority;
+    parameters
+}
+
 fn set_scheduler_raw(tid: libc::pid_t, policy: libc::c_int, priority: libc::c_int) -> bool {
-    let parameters = libc::sched_param {
-        sched_priority: priority,
-    };
+    let parameters = scheduler_parameters(priority);
     // SAFETY: the kernel reads a valid sched_param for the duration of this
     // syscall. Linux addresses a specific thread by TID here.
     unsafe {

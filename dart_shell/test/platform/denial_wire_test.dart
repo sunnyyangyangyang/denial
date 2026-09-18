@@ -22,6 +22,7 @@ void main() {
       tapToClickEnabled: true,
       naturalScrollEnabled: false,
       scrollSpeedFactor: 1,
+      scrollingLayoutSwipeSpeedFactor: 1,
     );
 
     final bytes = codec.encodeMouseConfiguration(
@@ -53,6 +54,56 @@ void main() {
     );
   });
 
+  test('touchpad request carries and bounds scrolling layout swipe speed', () {
+    final codec = DenialWireCodec();
+    const capabilities = DenialInputDeviceCapabilities(
+      revision: 7,
+      hasMouse: true,
+      mouseSpeed: 0.35,
+      hasTouchpad: true,
+      tapToClickEnabled: true,
+      naturalScrollEnabled: false,
+      scrollSpeedFactor: 1.5,
+      scrollingLayoutSwipeSpeedFactor: 2.25,
+    );
+
+    final bytes = codec.encodeTouchpadConfiguration(
+      requestId: 22,
+      capabilities: capabilities,
+    );
+
+    expect(bytes, isNotNull);
+    final envelope = Envelope(bytes!);
+    final request = envelope.payload as SettingsRequest;
+    expect(envelope.requestId, 22);
+    expect(request.kind, SettingsRequestKind.ConfigureTouchpad);
+    expect(request.expectedRevision, 7);
+    expect(request.touchpad!.scrollSpeedFactor, closeTo(1.5, 0.0001));
+    expect(
+      request.touchpad!.scrollingLayoutSwipeSpeedFactor,
+      closeTo(2.25, 0.0001),
+    );
+    expect(request.mouse, isNull);
+    expect(
+      codec.encodeTouchpadConfiguration(
+        requestId: 23,
+        capabilities: capabilities.copyWith(
+          scrollingLayoutSwipeSpeedFactor: 4.001,
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      codec.encodeTouchpadConfiguration(
+        requestId: 24,
+        capabilities: capabilities.copyWith(
+          scrollingLayoutSwipeSpeedFactor: double.nan,
+        ),
+      ),
+      isNull,
+    );
+  });
+
   test('input capability response carries mouse and touchpad settings', () {
     final bytes = EnvelopeObjectBuilder(
       protocolVersion: 1,
@@ -71,6 +122,7 @@ void main() {
             tapToClickEnabled: false,
             naturalScrollEnabled: true,
             scrollSpeedFactor: 2.25,
+            scrollingLayoutSwipeSpeedFactor: 1.75,
           ),
         ),
       ),
@@ -90,6 +142,7 @@ void main() {
     expect(capabilities.tapToClickEnabled, isFalse);
     expect(capabilities.naturalScrollEnabled, isTrue);
     expect(capabilities.scrollSpeedFactor, closeTo(2.25, 0.0001));
+    expect(capabilities.scrollingLayoutSwipeSpeedFactor, closeTo(1.75, 0.0001));
   });
 
   test('theme accent is encoded as opaque packed sRGB', () {

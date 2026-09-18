@@ -137,6 +137,7 @@ pub(super) fn synchronize_settings(
                         .as_mut()
                         .ok_or("settings request has no Wayland frontend")?;
                     let previous_cursor_policy = frontend.settings.allow_client_cursor_surfaces();
+                    let previous_cursor_size = frontend.settings.cursor_size();
                     let result = frontend
                         .settings
                         .prepare_shell_update(expected_revision, &document)
@@ -146,6 +147,11 @@ pub(super) fn synchronize_settings(
                             != frontend.settings.allow_client_cursor_surfaces()
                     {
                         frontend.queue_cursor_policy_update();
+                    }
+                    if result.is_ok() && previous_cursor_size != frontend.settings.cursor_size() {
+                        if let Err(error) = frontend.publish_xwayland_settings() {
+                            warn!(%error, "could not update Xwayland cursor settings");
+                        }
                     }
                     result
                 };
@@ -328,6 +334,8 @@ pub(super) fn synchronize_settings(
                                         tap_to_click = next.tap_to_click_enabled,
                                         natural_scroll = next.natural_scroll_enabled,
                                         scroll_speed_factor = next.scroll_speed_factor,
+                                        scrolling_layout_swipe_speed_factor =
+                                            next.scrolling_layout_swipe_speed_factor,
                                         "applied persistent touchpad settings"
                                     );
                                     Ok(())
@@ -666,6 +674,7 @@ fn synchronize_control_settings(
                     .and_then(|frontend| {
                         let previous_cursor_policy =
                             frontend.settings.allow_client_cursor_surfaces();
+                        let previous_cursor_size = frontend.settings.cursor_size();
                         frontend
                             .settings
                             .prepare_shell_update(expected_revision, &document)
@@ -677,6 +686,11 @@ fn synchronize_control_settings(
                             != frontend.settings.allow_client_cursor_surfaces()
                         {
                             frontend.queue_cursor_policy_update();
+                        }
+                        if previous_cursor_size != frontend.settings.cursor_size() {
+                            if let Err(error) = frontend.publish_xwayland_settings() {
+                                warn!(%error, "could not update Xwayland cursor settings");
+                            }
                         }
                         frontend.keyboard_configuration_changed = true;
                         frontend
@@ -834,6 +848,7 @@ fn control_input_snapshot(
         "tap_to_click_enabled": touchpad.tap_to_click_enabled,
         "natural_scroll_enabled": touchpad.natural_scroll_enabled,
         "scroll_speed_factor": touchpad.scroll_speed_factor,
+        "scrolling_layout_swipe_speed_factor": touchpad.scrolling_layout_swipe_speed_factor,
     }))
 }
 

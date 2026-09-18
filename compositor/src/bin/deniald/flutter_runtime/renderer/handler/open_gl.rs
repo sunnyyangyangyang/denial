@@ -163,16 +163,37 @@ impl OpenGlHandler for FlutterGlHandler {
             self.render_audit.as_ref(),
             RenderAuditStage::BackingStore,
         );
-        let size = PixelSize::new(
-            u32::try_from(request.width).ok()?,
-            u32::try_from(request.height).ok()?,
-        );
-        let framebuffer = match lock(&self.broker).acquire(request.view_id, size) {
+        let (Ok(width), Ok(height)) = (u32::try_from(request.width), u32::try_from(request.height))
+        else {
+            error!(
+                render_view_id = request.view_id,
+                width = request.width,
+                height = request.height,
+                reason = "invalid_dimensions",
+                "could not acquire Flutter embedder backing store"
+            );
+            return None;
+        };
+        let size = PixelSize::new(width, height);
+        let (acquisition, transaction) = {
+            let mut broker = lock(&self.broker);
+            let acquisition = broker.acquire(request.view_id, size);
+            (acquisition, broker.transaction)
+        };
+        let framebuffer = match acquisition {
             Ok(framebuffer) => framebuffer,
             Err(blocked) => {
                 if let Some(audit) = &self.render_audit {
                     lock(audit).record_target_blocked(blocked);
                 }
+                error!(
+                    render_view_id = request.view_id,
+                    width = size.width,
+                    height = size.height,
+                    transaction,
+                    reason = ?blocked,
+                    "could not acquire Flutter embedder backing store"
+                );
                 // Every independently clocked output can temporarily retain a
                 // scanning generation, an atomic submission awaiting page flip,
                 // and a newer ready generation. Exhaustion remains ordinary

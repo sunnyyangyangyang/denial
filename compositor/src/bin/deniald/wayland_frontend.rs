@@ -25,8 +25,9 @@ use smithay::backend::renderer::utils::{
 use smithay::backend::renderer::{Color32F, Frame, ImportDma, Renderer};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::desktop::{
-    PopupKeyboardGrab, PopupKind, PopupManager, PopupPointerGrab, PopupUngrabStrategy, Space,
-    Window, WindowSurfaceType, find_popup_root_surface, get_popup_toplevel_coords,
+    LayerSurface as DesktopLayerSurface, PopupKeyboardGrab, PopupKind, PopupManager,
+    PopupPointerGrab, PopupUngrabStrategy, Space, Window, WindowSurfaceType,
+    find_popup_root_surface, get_popup_toplevel_coords, layer_map_for_output,
 };
 use smithay::input::dnd::{DnDGrab, DndGrabHandler, GrabType, Source};
 #[cfg(feature = "flutter")]
@@ -90,6 +91,10 @@ use smithay::wayland::shell::xdg::{
     XdgShellState, XdgToplevelSurfaceData,
 };
 use smithay::wayland::shell::xdg::decoration::{XdgDecorationHandler, XdgDecorationState};
+use smithay::wayland::shell::wlr_layer::{
+    Layer as WlrLayer, LayerSurface as WlrLayerSurface, LayerSurfaceData, WlrLayerShellHandler,
+    WlrLayerShellState,
+};
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::socket::ListeningSocketSource;
 use smithay::wayland::tablet_manager::{TabletManagerState, TabletSeatHandler};
@@ -113,8 +118,7 @@ use super::local_windows::{LocalFlutterWindows, LocalWindowError};
 use super::native_shortcut::ShortcutManager;
 use super::settings::SettingsManager;
 use super::window_grab::{
-    MoveSurfaceGrab, ResizeEdges, ResizeSurfaceGrab, X11ResizeSurfaceGrab, checked_pointer_grab,
-    constrain_dimension,
+    MoveSurfaceGrab, ResizeEdges, ResizeSurfaceGrab, checked_pointer_grab, constrain_dimension,
 };
 use super::window_layout::{WindowLayout, create_window_layout};
 use super::window_placement_store::{
@@ -149,10 +153,16 @@ pub(super) mod input_method;
 #[cfg(feature = "flutter")]
 #[path = "wayland_frontend/insets.rs"]
 mod insets;
+#[path = "wayland_frontend/managed_window.rs"]
+mod managed_window;
+#[cfg(feature = "flutter")]
+pub(super) use focus::{restore_shell_keyboard_focus, suspend_keyboard_focus_for_shell};
 #[cfg(feature = "flutter")]
 pub(super) use input::{dispatch_shell_keyboard, reconcile_flutter_pointer_route};
 #[path = "wayland_frontend/input_source.rs"]
 mod input_source;
+#[path = "wayland_frontend/layer_shell.rs"]
+mod layer_shell;
 #[path = "wayland_frontend/output_power.rs"]
 mod output_power;
 #[path = "wayland_frontend/presentation.rs"]
@@ -181,6 +191,8 @@ mod topology;
 mod touch_gestures;
 #[path = "wayland_frontend/window_layout.rs"]
 mod window_layout_adapter;
+#[cfg(feature = "flutter")]
+pub(crate) use window_layout_adapter::LayoutDropTarget;
 #[path = "wayland_frontend/window_management.rs"]
 mod window_management;
 #[cfg(feature = "flutter")]
@@ -194,10 +206,9 @@ mod workspace;
 #[path = "wayland_frontend/xwayland.rs"]
 mod xwayland;
 
+pub(super) use clipboard_io::DeferredClipboardCapture;
 #[cfg(feature = "flutter")]
-pub(super) use clipboard_io::{
-    DeferredClipboardCapture, apply_clipboard_actions, cancel_clipboard_captures,
-};
+pub(super) use clipboard_io::{apply_clipboard_actions, cancel_clipboard_captures};
 use focus::KeyboardFocusTarget;
 use handlers::{MAX_WAYLAND_CLIENTS, WaylandClientBudget};
 #[cfg(feature = "flutter")]
@@ -212,6 +223,7 @@ pub(super) use input::{
 #[cfg(feature = "flutter")]
 use input_method::EditorEndpoint;
 use input_method::InputMethodManager;
+use managed_window::toplevel_has_state;
 use output_power::OutputPowerManager;
 #[cfg(feature = "flutter")]
 use surface_snapshot::{rgba_payload_len, shm_cache_budget_for_atlas, snapshot_shm_buffer};
@@ -221,16 +233,14 @@ use topology::{
     choose_popup_output, clamp_window_geometry, configure_output, output_logical_bounds,
     saturating_point_sub,
 };
-use window_management::toplevel_has_state;
+use window_management::SHELL_FRAME_BORDER;
 #[cfg(feature = "flutter")]
 pub(super) use window_management::{
     apply_window_commands, queue_local_flutter_window_placement, queue_transient_window_placement,
     queue_window_placement,
 };
 #[cfg(feature = "flutter")]
-use window_management::{
-    shell_content_geometry, shell_draws_server_frame, shell_draws_x11_server_frame,
-};
+use window_management::{shell_content_geometry, shell_draws_server_frame};
 
 const MAX_PENDING_DMABUF_IMPORTS: usize = 128;
 const XDG_ACTIVATION_TOKEN_LIFETIME: Duration = Duration::from_secs(10);
@@ -325,9 +335,9 @@ enum ClientCursorIntent {
 fn resolved_client_cursor_intent(
     intent: ClientCursorIntent,
     allow_surface: bool,
-    drag_active: bool,
+    shell_cursor_override: bool,
 ) -> ClientCursorIntent {
-    if drag_active {
+    if shell_cursor_override {
         return ClientCursorIntent::Named("default");
     }
     match intent {
@@ -427,11 +437,17 @@ pub(super) struct WaylandFrontend {
     scene_complex_windows: HashSet<u64>,
     #[cfg(feature = "flutter")]
     scene_complex_windows_scratch: HashSet<u64>,
+    #[cfg(feature = "flutter")]
+    scene_layer_surface_roots: HashSet<u64>,
+    #[cfg(feature = "flutter")]
+    scene_layer_surface_roots_scratch: HashSet<u64>,
     window_membership_scratch: Vec<Window>,
     #[cfg(feature = "flutter")]
     output_window_membership: OutputWindowMembership<ObjectId, Window>,
     #[cfg(feature = "flutter")]
     pending_frame_callback_windows: HashSet<ObjectId>,
+    #[cfg(feature = "flutter")]
+    pending_layer_frame_callback_roots: HashSet<ObjectId>,
     #[cfg(feature = "flutter")]
     pending_input_method_frame_callbacks: HashSet<ObjectId>,
     #[cfg(feature = "flutter")]
@@ -445,8 +461,7 @@ pub(super) struct WaylandFrontend {
     surface_ids: HashMap<ObjectId, u64>,
     surfaces_by_id: HashMap<u64, WlSurface>,
     next_surface_id: u64,
-    configured_window_geometries: HashMap<ObjectId, Rectangle<i32, Logical>>,
-    exact_window_geometries: HashMap<ObjectId, Rectangle<i32, Logical>>,
+    window_geometry_intents: HashMap<ObjectId, WindowGeometryIntent>,
     restore_window_geometries: HashMap<ObjectId, Rectangle<i32, Logical>>,
     window_layout: Box<dyn WindowLayout<ObjectId>>,
     layout_restore_geometries: HashMap<ObjectId, Rectangle<i32, Logical>>,
@@ -461,6 +476,8 @@ pub(super) struct WaylandFrontend {
     local_vertical_restore_geometries: HashMap<u64, (f64, f64)>,
     #[cfg(feature = "flutter")]
     input_layout: Option<InputLayoutSnapshot>,
+    #[cfg(feature = "flutter")]
+    shell_keyboard_focus: Option<KeyboardFocusTarget>,
     #[cfg(feature = "flutter")]
     shell_fullscreen_locks: HashSet<ObjectId>,
     #[cfg(feature = "flutter")]
@@ -487,6 +504,8 @@ pub(super) struct WaylandFrontend {
     flutter_pointer_press: Option<FlutterPointerPress>,
     #[cfg(feature = "flutter")]
     clipboard_drag_active: bool,
+    #[cfg(feature = "flutter")]
+    compositor_pointer_grab_active: bool,
     wayland_pointer_buttons: HashSet<u32>,
     #[cfg(feature = "flutter")]
     routed_pointer_target: RoutedPointerTarget,
@@ -535,8 +554,6 @@ pub(super) struct WaylandFrontend {
     #[cfg(feature = "flutter")]
     flutter_keyboard_keys: HashSet<u32>,
     #[cfg(feature = "flutter")]
-    flutter_input_method_keys: HashSet<u32>,
-    #[cfg(feature = "flutter")]
     shell_keyboard_keys: HashSet<u32>,
     #[cfg(feature = "flutter")]
     flutter_compose: Option<xkb::compose::State>,
@@ -547,8 +564,6 @@ pub(super) struct WaylandFrontend {
     #[cfg(feature = "flutter")]
     flutter_repeat_token: Option<RegistrationToken>,
     retired_keyboard_keys: HashSet<u32>,
-    #[cfg(feature = "flutter")]
-    retired_input_method_keys: HashSet<u32>,
     #[cfg(feature = "flutter")]
     minimized_windows: HashSet<ObjectId>,
     #[cfg(feature = "flutter")]
@@ -574,6 +589,8 @@ pub(super) struct WaylandFrontend {
     pub data_device_state: DataDeviceState,
     pub popups: PopupManager,
     pub seat: Seat<RuntimeState>,
+    layer_shell_state: WlrLayerShellState,
+    libinput: smithay::reexports::input::Libinput,
     pub(super) settings: SettingsManager,
     pub(super) shortcuts: ShortcutManager,
     pub(super) keyboard_layout_names: Vec<String>,
@@ -618,33 +635,6 @@ struct FlutterPointerPress {
     serial: Serial,
     time: u32,
     location: Point<f64, Logical>,
-}
-
-#[cfg(feature = "flutter")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ShellFullscreenTransition {
-    EnterShell,
-    ExitShell,
-    ExitClient,
-    Blocked,
-}
-
-#[cfg(feature = "flutter")]
-fn shell_fullscreen_transition(
-    client_fullscreen: bool,
-    shell_fullscreen: bool,
-    geometry_locked: bool,
-) -> ShellFullscreenTransition {
-    if client_fullscreen {
-        return ShellFullscreenTransition::ExitClient;
-    }
-    if shell_fullscreen {
-        return ShellFullscreenTransition::ExitShell;
-    }
-    if geometry_locked {
-        return ShellFullscreenTransition::Blocked;
-    }
-    ShellFullscreenTransition::EnterShell
 }
 
 struct WaylandOutput {
@@ -693,6 +683,169 @@ fn initial_xdg_placement_policy(
 struct PendingClientSizedPlacement {
     requested_location: Point<i32, Logical>,
     output_id: OutputId,
+}
+
+/// The single compositor-side geometry contract for a managed window.
+///
+/// Protocol callbacks may acknowledge or challenge this target, but neither
+/// XDG nor Xwayland gets a second placement record. Pending targets disappear
+/// after acknowledgement; authoritative targets remain until the policy which
+/// owns them (layout, client state, or shell state) explicitly replaces them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WindowGeometryIntent {
+    target: Rectangle<i32, Logical>,
+    authority: WindowGeometryAuthority,
+    reassertion: WindowGeometryReassertion,
+}
+
+impl WindowGeometryIntent {
+    fn for_contract(
+        target: Rectangle<i32, Logical>,
+        authority: WindowGeometryAuthority,
+        previous: Option<Self>,
+    ) -> Self {
+        let reassertion = previous
+            .filter(|previous| previous.target == target && previous.authority == authority)
+            .map_or(WindowGeometryReassertion::Available, |previous| {
+                previous.reassertion
+            });
+        Self {
+            target,
+            authority,
+            reassertion,
+        }
+    }
+
+    fn retained_after_commit(self, committed: Size<i32, Logical>) -> bool {
+        committed != self.target.size || self.authority.persistent()
+    }
+
+    fn claim_reassertion(&mut self) -> WindowGeometryReassertionAction {
+        match self.reassertion {
+            WindowGeometryReassertion::Available => {
+                self.reassertion = WindowGeometryReassertion::Sent;
+                WindowGeometryReassertionAction::Send
+            }
+            WindowGeometryReassertion::Sent => {
+                self.reassertion = WindowGeometryReassertion::Suppressed;
+                WindowGeometryReassertionAction::ReportSuppressed
+            }
+            WindowGeometryReassertion::Suppressed => WindowGeometryReassertionAction::Suppress,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum WindowGeometryReassertion {
+    #[default]
+    Available,
+    Sent,
+    Suppressed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WindowGeometryReassertionAction {
+    Send,
+    ReportSuppressed,
+    Suppress,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WindowGeometryAuthority {
+    Pending,
+    Layout,
+    ClientState,
+    Shell,
+    Exact,
+}
+
+impl WindowGeometryAuthority {
+    const fn persistent(self) -> bool {
+        !matches!(self, Self::Pending)
+    }
+
+    const fn exact(self) -> bool {
+        matches!(self, Self::Shell | Self::Exact)
+    }
+}
+
+#[cfg(test)]
+mod window_geometry_intent_tests {
+    use super::*;
+
+    fn intent(authority: WindowGeometryAuthority) -> WindowGeometryIntent {
+        WindowGeometryIntent {
+            target: Rectangle::new((10, 20).into(), (800, 600).into()),
+            authority,
+            reassertion: WindowGeometryReassertion::Available,
+        }
+    }
+
+    #[test]
+    fn matching_commit_releases_only_one_shot_geometry() {
+        let committed = Size::from((800, 600));
+        assert!(!intent(WindowGeometryAuthority::Pending).retained_after_commit(committed));
+        assert!(intent(WindowGeometryAuthority::Layout).retained_after_commit(committed));
+        assert!(intent(WindowGeometryAuthority::ClientState).retained_after_commit(committed));
+        assert!(intent(WindowGeometryAuthority::Shell).retained_after_commit(committed));
+        assert!(intent(WindowGeometryAuthority::Exact).retained_after_commit(committed));
+    }
+
+    #[test]
+    fn mismatched_commit_never_replaces_the_current_target() {
+        let committed = Size::from((1920, 1080));
+        for authority in [
+            WindowGeometryAuthority::Pending,
+            WindowGeometryAuthority::Layout,
+            WindowGeometryAuthority::ClientState,
+            WindowGeometryAuthority::Shell,
+            WindowGeometryAuthority::Exact,
+        ] {
+            assert!(intent(authority).retained_after_commit(committed));
+        }
+    }
+
+    #[test]
+    fn one_geometry_contract_can_only_reassert_once() {
+        let mut intent = intent(WindowGeometryAuthority::Layout);
+        assert_eq!(
+            intent.claim_reassertion(),
+            WindowGeometryReassertionAction::Send
+        );
+        assert_eq!(
+            intent.claim_reassertion(),
+            WindowGeometryReassertionAction::ReportSuppressed
+        );
+        assert_eq!(
+            intent.claim_reassertion(),
+            WindowGeometryReassertionAction::Suppress
+        );
+    }
+
+    #[test]
+    fn unchanged_geometry_contract_preserves_its_reassertion_guard() {
+        let target = Rectangle::new((10, 20).into(), (800, 600).into());
+        let mut previous =
+            WindowGeometryIntent::for_contract(target, WindowGeometryAuthority::Layout, None);
+        assert_eq!(
+            previous.claim_reassertion(),
+            WindowGeometryReassertionAction::Send
+        );
+
+        let unchanged = WindowGeometryIntent::for_contract(
+            target,
+            WindowGeometryAuthority::Layout,
+            Some(previous),
+        );
+        assert_eq!(unchanged.reassertion, WindowGeometryReassertion::Sent);
+
+        let changed = WindowGeometryIntent::for_contract(
+            Rectangle::new((10, 20).into(), (900, 600).into()),
+            WindowGeometryAuthority::Layout,
+            Some(previous),
+        );
+        assert_eq!(changed.reassertion, WindowGeometryReassertion::Available);
+    }
 }
 
 #[cfg(feature = "flutter")]

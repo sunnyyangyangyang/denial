@@ -173,10 +173,24 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
             .handle()
             .insert_source(session_notifier, |event, _, state| match event {
                 SessionEvent::PauseSession => {
+                    if let Some(frontend) = state.wayland.as_mut() {
+                        frontend.suspend_input_session();
+                        info!("suspended libinput with the libseat session");
+                    }
                     wayland_frontend::reset_all_input_devices(state);
                     state.lifecycle.pause_session();
                 }
-                SessionEvent::ActivateSession => state.lifecycle.activate_session(),
+                SessionEvent::ActivateSession => {
+                    if let Some(frontend) = state.wayland.as_mut() {
+                        match frontend.resume_input_session() {
+                            Ok(()) => info!("resumed libinput with the libseat session"),
+                            Err(error) => {
+                                error!(%error, "could not resume input after libseat activation")
+                            }
+                        }
+                    }
+                    state.lifecycle.activate_session();
+                }
             })?;
         event_loop.handle().insert_source(
             signal_source.ok_or("signal source was not prepared before worker startup")?,

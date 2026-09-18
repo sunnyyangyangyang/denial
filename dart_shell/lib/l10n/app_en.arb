@@ -1943,6 +1943,38 @@
   "@settingsAutomaticIdleTitle": {
     "description": "Title for the coordinated idle lock, display power, and suspend settings."
   },
+  "settingsPowerButtonTitle": "Power button",
+  "@settingsPowerButtonTitle": {
+    "description": "Title for physical power button behavior settings."
+  },
+  "settingsPowerButtonAction": "Action",
+  "@settingsPowerButtonAction": {
+    "description": "Label for the physical power button action selector."
+  },
+  "settingsPowerButtonDescription": "Choose what happens when you press the physical power button.",
+  "@settingsPowerButtonDescription": {
+    "description": "Explanation for the physical power button action selector."
+  },
+  "settingsPowerButtonSuspend": "Suspend",
+  "@settingsPowerButtonSuspend": {
+    "description": "Power button action that suspends the system."
+  },
+  "settingsPowerButtonHibernate": "Hibernate",
+  "@settingsPowerButtonHibernate": {
+    "description": "Power button action that hibernates the system."
+  },
+  "settingsPowerButtonHibernateUnavailable": "Hibernate (unavailable)",
+  "@settingsPowerButtonHibernateUnavailable": {
+    "description": "Disabled persisted hibernate action when hibernation is unavailable."
+  },
+  "settingsPowerButtonDpms": "Turn off displays (DPMS)",
+  "@settingsPowerButtonDpms": {
+    "description": "Power button action that toggles compositor-owned display power."
+  },
+  "settingsPowerButtonPowerOff": "Power off",
+  "@settingsPowerButtonPowerOff": {
+    "description": "Power button action that powers off the system."
+  },
   "settingsAutomaticLockToggle": "Lock automatically",
   "@settingsAutomaticLockToggle": {
     "description": "Toggle for automatically locking the session after inactivity."
@@ -2264,6 +2296,10 @@
   "settingsTransparencyTitle": "Transparency material",
   "@settingsTransparencyTitle": {
     "description": "Title for choosing the visual material behind translucent shell surfaces."
+  },
+  "settingsTypographyTitle": "Typography",
+  "@settingsTypographyTitle": {
+    "description": "Title for shell typography appearance settings."
   },
   "settingsTransparencyOff": "Off",
   "@settingsTransparencyOff": {
@@ -2738,6 +2774,22 @@
   "@settingsFocusedWindows": {
     "description": "English UI text for settingsFocusedWindows."
   },
+  "settingsFontCatalogLoading": "Finding installed fonts…",
+  "@settingsFontCatalogLoading": {
+    "description": "Description shown while the shell font catalog is loading."
+  },
+  "settingsFontDescription": "Use the system default or an installed font across the Denial shell.",
+  "@settingsFontDescription": {
+    "description": "Explanation for the shell font family selector."
+  },
+  "settingsFontFamily": "Font family",
+  "@settingsFontFamily": {
+    "description": "Label for the shell font family selector."
+  },
+  "settingsFontSystemDefault": "System default",
+  "@settingsFontSystemDefault": {
+    "description": "Option that restores the platform's default font family."
+  },
   "settingsFocusedWindowBorder": "Highlight the focused window border",
   "@settingsFocusedWindowBorder": {
     "description": "Toggle label for changing the focused window border to the accent colour."
@@ -2937,6 +2989,10 @@
   "settingsTouchpadScrollSpeed": "Finger scroll speed",
   "@settingsTouchpadScrollSpeed": {
     "description": "Label for the continuous touchpad scroll speed slider."
+  },
+  "settingsTouchpadScrollingLayoutSwipeSpeed": "Scrolling layout swipe speed",
+  "@settingsTouchpadScrollingLayoutSwipeSpeed": {
+    "description": "Label for the continuous three-finger scrolling-layout swipe speed slider."
   },
   "settingsMousePointerSpeed": "Mouse pointer speed",
   "@settingsMousePointerSpeed": {
@@ -3418,7 +3474,7 @@
   "@settingsLayoutTitle": {
     "description": "English UI text for settingsLayoutTitle."
   },
-  "settingsWindowLayoutDescription": "Stacking lets windows overlap. Tiling divides the desktop dynamically. Scrolling arranges full-height columns in a focus-following horizontal strip.",
+  "settingsWindowLayoutDescription": "Stacking lets windows overlap. Tiling divides the desktop dynamically. Scrolling follows focus along a strip that turns vertical with a quarter-turned monitor.",
   "@settingsWindowLayoutDescription": {
     "description": "Explains the available desktop window layouts."
   },
@@ -3432,7 +3488,7 @@
   },
   "settingsWindowLayoutScrolling": "Scrolling",
   "@settingsWindowLayoutScrolling": {
-    "description": "Label for the focus-following horizontal scrolling layout."
+    "description": "Label for the focus-following adaptive-axis scrolling layout."
   },
   "settingsWindowLayoutTitle": "Window layout",
   "@settingsWindowLayoutTitle": {

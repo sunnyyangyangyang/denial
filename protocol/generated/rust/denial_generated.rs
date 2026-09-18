@@ -114,12 +114,16 @@ impl flatbuffers::SimpleToVerifyInSlice for ObjectKind {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_WINDOW_CONTENT_KIND: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_WINDOW_CONTENT_KIND: u8 = 1;
+pub const ENUM_MAX_WINDOW_CONTENT_KIND: u8 = 5;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_WINDOW_CONTENT_KIND: [WindowContentKind; 2] = [
+pub const ENUM_VALUES_WINDOW_CONTENT_KIND: [WindowContentKind; 6] = [
   WindowContentKind::SurfaceTree,
   WindowContentKind::LocalFlutter,
+  WindowContentKind::LayerShellBackground,
+  WindowContentKind::LayerShellBottom,
+  WindowContentKind::LayerShellTop,
+  WindowContentKind::LayerShellOverlay,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -129,18 +133,30 @@ pub struct WindowContentKind(pub u8);
 impl WindowContentKind {
   pub const SurfaceTree: Self = Self(0);
   pub const LocalFlutter: Self = Self(1);
+  pub const LayerShellBackground: Self = Self(2);
+  pub const LayerShellBottom: Self = Self(3);
+  pub const LayerShellTop: Self = Self(4);
+  pub const LayerShellOverlay: Self = Self(5);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 1;
+  pub const ENUM_MAX: u8 = 5;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::SurfaceTree,
     Self::LocalFlutter,
+    Self::LayerShellBackground,
+    Self::LayerShellBottom,
+    Self::LayerShellTop,
+    Self::LayerShellOverlay,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
     match self {
       Self::SurfaceTree => Some("SurfaceTree"),
       Self::LocalFlutter => Some("LocalFlutter"),
+      Self::LayerShellBackground => Some("LayerShellBackground"),
+      Self::LayerShellBottom => Some("LayerShellBottom"),
+      Self::LayerShellTop => Some("LayerShellTop"),
+      Self::LayerShellOverlay => Some("LayerShellOverlay"),
       _ => None,
     }
   }
@@ -664,15 +680,16 @@ impl flatbuffers::SimpleToVerifyInSlice for WindowEventKind {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_WINDOW_ACTION_KIND: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_WINDOW_ACTION_KIND: u8 = 4;
+pub const ENUM_MAX_WINDOW_ACTION_KIND: u8 = 5;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_WINDOW_ACTION_KIND: [WindowActionKind; 5] = [
+pub const ENUM_VALUES_WINDOW_ACTION_KIND: [WindowActionKind; 6] = [
   WindowActionKind::Minimize,
   WindowActionKind::Maximize,
   WindowActionKind::Restore,
   WindowActionKind::ToggleMaximize,
   WindowActionKind::ToggleFullscreen,
+  WindowActionKind::Fullscreen,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -685,15 +702,17 @@ impl WindowActionKind {
   pub const Restore: Self = Self(2);
   pub const ToggleMaximize: Self = Self(3);
   pub const ToggleFullscreen: Self = Self(4);
+  pub const Fullscreen: Self = Self(5);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 4;
+  pub const ENUM_MAX: u8 = 5;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::Minimize,
     Self::Maximize,
     Self::Restore,
     Self::ToggleMaximize,
     Self::ToggleFullscreen,
+    Self::Fullscreen,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
@@ -703,6 +722,7 @@ impl WindowActionKind {
       Self::Restore => Some("Restore"),
       Self::ToggleMaximize => Some("ToggleMaximize"),
       Self::ToggleFullscreen => Some("ToggleFullscreen"),
+      Self::Fullscreen => Some("Fullscreen"),
       _ => None,
     }
   }
@@ -761,10 +781,10 @@ impl flatbuffers::SimpleToVerifyInSlice for WindowActionKind {}
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_SHELL_ACTION_KIND: u8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
-pub const ENUM_MAX_SHELL_ACTION_KIND: u8 = 13;
+pub const ENUM_MAX_SHELL_ACTION_KIND: u8 = 17;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_SHELL_ACTION_KIND: [ShellActionKind; 14] = [
+pub const ENUM_VALUES_SHELL_ACTION_KIND: [ShellActionKind; 18] = [
   ShellActionKind::Applications,
   ShellActionKind::Overview,
   ShellActionKind::WindowSwitcherNext,
@@ -779,6 +799,10 @@ pub const ENUM_VALUES_SHELL_ACTION_KIND: [ShellActionKind; 14] = [
   ShellActionKind::OpenSettings,
   ShellActionKind::Dashboard,
   ShellActionKind::WorkspaceChanged,
+  ShellActionKind::FocusLeft,
+  ShellActionKind::FocusRight,
+  ShellActionKind::FocusUp,
+  ShellActionKind::FocusDown,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -800,9 +824,13 @@ impl ShellActionKind {
   pub const OpenSettings: Self = Self(11);
   pub const Dashboard: Self = Self(12);
   pub const WorkspaceChanged: Self = Self(13);
+  pub const FocusLeft: Self = Self(14);
+  pub const FocusRight: Self = Self(15);
+  pub const FocusUp: Self = Self(16);
+  pub const FocusDown: Self = Self(17);
 
   pub const ENUM_MIN: u8 = 0;
-  pub const ENUM_MAX: u8 = 13;
+  pub const ENUM_MAX: u8 = 17;
   pub const ENUM_VALUES: &'static [Self] = &[
     Self::Applications,
     Self::Overview,
@@ -818,6 +846,10 @@ impl ShellActionKind {
     Self::OpenSettings,
     Self::Dashboard,
     Self::WorkspaceChanged,
+    Self::FocusLeft,
+    Self::FocusRight,
+    Self::FocusUp,
+    Self::FocusDown,
   ];
   /// Returns the variant's name or "" if unknown.
   pub fn variant_name(self) -> Option<&'static str> {
@@ -836,6 +868,10 @@ impl ShellActionKind {
       Self::OpenSettings => Some("OpenSettings"),
       Self::Dashboard => Some("Dashboard"),
       Self::WorkspaceChanged => Some("WorkspaceChanged"),
+      Self::FocusLeft => Some("FocusLeft"),
+      Self::FocusRight => Some("FocusRight"),
+      Self::FocusUp => Some("FocusUp"),
+      Self::FocusDown => Some("FocusDown"),
       _ => None,
     }
   }
@@ -4030,6 +4066,8 @@ impl<'a> Window<'a> {
   pub const VT_OPACITY_CLASS: flatbuffers::VOffsetT = 76;
   pub const VT_WORKSPACE_ID: flatbuffers::VOffsetT = 78;
   pub const VT_MINIMIZED: flatbuffers::VOffsetT = 80;
+  pub const VT_FULLSCREEN: flatbuffers::VOffsetT = 82;
+  pub const VT_MAXIMIZED: flatbuffers::VOffsetT = 84;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -4072,6 +4110,8 @@ impl<'a> Window<'a> {
     builder.add_width(args.width);
     if let Some(x) = args.app_id { builder.add_app_id(x); }
     if let Some(x) = args.title { builder.add_title(x); }
+    builder.add_maximized(args.maximized);
+    builder.add_fullscreen(args.fullscreen);
     builder.add_minimized(args.minimized);
     builder.add_opacity_class(args.opacity_class);
     builder.add_content_kind(args.content_kind);
@@ -4357,6 +4397,20 @@ impl<'a> Window<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<bool>(Window::VT_MINIMIZED, Some(false)).unwrap()}
   }
+  #[inline]
+  pub fn fullscreen(&self) -> bool {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(Window::VT_FULLSCREEN, Some(false)).unwrap()}
+  }
+  #[inline]
+  pub fn maximized(&self) -> bool {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(Window::VT_MAXIMIZED, Some(false)).unwrap()}
+  }
 }
 
 impl flatbuffers::Verifiable for Window<'_> {
@@ -4405,6 +4459,8 @@ impl flatbuffers::Verifiable for Window<'_> {
      .visit_field::<WindowOpacityClass>("opacity_class", Self::VT_OPACITY_CLASS, false)?
      .visit_field::<i64>("workspace_id", Self::VT_WORKSPACE_ID, false)?
      .visit_field::<bool>("minimized", Self::VT_MINIMIZED, false)?
+     .visit_field::<bool>("fullscreen", Self::VT_FULLSCREEN, false)?
+     .visit_field::<bool>("maximized", Self::VT_MAXIMIZED, false)?
      .finish();
     Ok(())
   }
@@ -4449,6 +4505,8 @@ pub struct WindowArgs<'a> {
     pub opacity_class: WindowOpacityClass,
     pub workspace_id: i64,
     pub minimized: bool,
+    pub fullscreen: bool,
+    pub maximized: bool,
 }
 impl<'a> Default for WindowArgs<'a> {
   #[inline]
@@ -4493,6 +4551,8 @@ impl<'a> Default for WindowArgs<'a> {
       opacity_class: WindowOpacityClass::ContentTranslucent,
       workspace_id: 1,
       minimized: false,
+      fullscreen: false,
+      maximized: false,
     }
   }
 }
@@ -4659,6 +4719,14 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> WindowBuilder<'a, 'b, A> {
     self.fbb_.push_slot::<bool>(Window::VT_MINIMIZED, minimized, false);
   }
   #[inline]
+  pub fn add_fullscreen(&mut self, fullscreen: bool) {
+    self.fbb_.push_slot::<bool>(Window::VT_FULLSCREEN, fullscreen, false);
+  }
+  #[inline]
+  pub fn add_maximized(&mut self, maximized: bool) {
+    self.fbb_.push_slot::<bool>(Window::VT_MAXIMIZED, maximized, false);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> WindowBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     WindowBuilder {
@@ -4715,6 +4783,8 @@ impl core::fmt::Debug for Window<'_> {
       ds.field("opacity_class", &self.opacity_class());
       ds.field("workspace_id", &self.workspace_id());
       ds.field("minimized", &self.minimized());
+      ds.field("fullscreen", &self.fullscreen());
+      ds.field("maximized", &self.maximized());
       ds.finish()
   }
 }
@@ -8189,6 +8259,7 @@ impl<'a> TouchpadConfiguration<'a> {
   pub const VT_TAP_TO_CLICK_ENABLED: flatbuffers::VOffsetT = 4;
   pub const VT_NATURAL_SCROLL_ENABLED: flatbuffers::VOffsetT = 6;
   pub const VT_SCROLL_SPEED_FACTOR: flatbuffers::VOffsetT = 8;
+  pub const VT_SCROLLING_LAYOUT_SWIPE_SPEED_FACTOR: flatbuffers::VOffsetT = 10;
 
   #[inline]
   pub unsafe fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
@@ -8200,6 +8271,7 @@ impl<'a> TouchpadConfiguration<'a> {
     args: &'args TouchpadConfigurationArgs
   ) -> flatbuffers::WIPOffset<TouchpadConfiguration<'bldr>> {
     let mut builder = TouchpadConfigurationBuilder::new(_fbb);
+    builder.add_scrolling_layout_swipe_speed_factor(args.scrolling_layout_swipe_speed_factor);
     builder.add_scroll_speed_factor(args.scroll_speed_factor);
     builder.add_natural_scroll_enabled(args.natural_scroll_enabled);
     builder.add_tap_to_click_enabled(args.tap_to_click_enabled);
@@ -8228,6 +8300,13 @@ impl<'a> TouchpadConfiguration<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<f64>(TouchpadConfiguration::VT_SCROLL_SPEED_FACTOR, Some(1.0)).unwrap()}
   }
+  #[inline]
+  pub fn scrolling_layout_swipe_speed_factor(&self) -> f64 {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<f64>(TouchpadConfiguration::VT_SCROLLING_LAYOUT_SWIPE_SPEED_FACTOR, Some(1.0)).unwrap()}
+  }
 }
 
 impl flatbuffers::Verifiable for TouchpadConfiguration<'_> {
@@ -8240,6 +8319,7 @@ impl flatbuffers::Verifiable for TouchpadConfiguration<'_> {
      .visit_field::<bool>("tap_to_click_enabled", Self::VT_TAP_TO_CLICK_ENABLED, false)?
      .visit_field::<bool>("natural_scroll_enabled", Self::VT_NATURAL_SCROLL_ENABLED, false)?
      .visit_field::<f64>("scroll_speed_factor", Self::VT_SCROLL_SPEED_FACTOR, false)?
+     .visit_field::<f64>("scrolling_layout_swipe_speed_factor", Self::VT_SCROLLING_LAYOUT_SWIPE_SPEED_FACTOR, false)?
      .finish();
     Ok(())
   }
@@ -8248,6 +8328,7 @@ pub struct TouchpadConfigurationArgs {
     pub tap_to_click_enabled: bool,
     pub natural_scroll_enabled: bool,
     pub scroll_speed_factor: f64,
+    pub scrolling_layout_swipe_speed_factor: f64,
 }
 impl<'a> Default for TouchpadConfigurationArgs {
   #[inline]
@@ -8256,6 +8337,7 @@ impl<'a> Default for TouchpadConfigurationArgs {
       tap_to_click_enabled: true,
       natural_scroll_enabled: false,
       scroll_speed_factor: 1.0,
+      scrolling_layout_swipe_speed_factor: 1.0,
     }
   }
 }
@@ -8278,6 +8360,10 @@ impl<'a: 'b, 'b, A: flatbuffers::Allocator + 'a> TouchpadConfigurationBuilder<'a
     self.fbb_.push_slot::<f64>(TouchpadConfiguration::VT_SCROLL_SPEED_FACTOR, scroll_speed_factor, 1.0);
   }
   #[inline]
+  pub fn add_scrolling_layout_swipe_speed_factor(&mut self, scrolling_layout_swipe_speed_factor: f64) {
+    self.fbb_.push_slot::<f64>(TouchpadConfiguration::VT_SCROLLING_LAYOUT_SWIPE_SPEED_FACTOR, scrolling_layout_swipe_speed_factor, 1.0);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a, A>) -> TouchpadConfigurationBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     TouchpadConfigurationBuilder {
@@ -8298,6 +8384,7 @@ impl core::fmt::Debug for TouchpadConfiguration<'_> {
       ds.field("tap_to_click_enabled", &self.tap_to_click_enabled());
       ds.field("natural_scroll_enabled", &self.natural_scroll_enabled());
       ds.field("scroll_speed_factor", &self.scroll_speed_factor());
+      ds.field("scrolling_layout_swipe_speed_factor", &self.scrolling_layout_swipe_speed_factor());
       ds.finish()
   }
 }

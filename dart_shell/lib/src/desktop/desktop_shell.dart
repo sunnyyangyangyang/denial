@@ -68,6 +68,7 @@ import '../wallpaper/widgets/wallpaper_selector_surface.dart';
 import 'desktop_overview_preview_interaction.dart';
 import 'desktop_audio_device_dropdown.dart';
 import 'desktop_overview_layout.dart';
+import 'desktop_overview_keyboard.dart';
 import 'desktop_overview_target.dart';
 import 'desktop_home_layout.dart';
 import 'desktop_minimize_layer_handoff.dart';
@@ -277,6 +278,14 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
       case DenialShellAction.overview:
         _cancelWindowSwitcher();
         _toggleOverview(event.monitorId);
+      case DenialShellAction.focusLeft:
+        _moveOverviewSelection(DesktopOverviewDirection.left);
+      case DenialShellAction.focusRight:
+        _moveOverviewSelection(DesktopOverviewDirection.right);
+      case DenialShellAction.focusUp:
+        _moveOverviewSelection(DesktopOverviewDirection.up);
+      case DenialShellAction.focusDown:
+        _moveOverviewSelection(DesktopOverviewDirection.down);
       case DenialShellAction.windowSwitcherNext:
         _cycleWindowSwitcher(
           event.monitorId,
@@ -554,7 +563,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     final workspaceState = ref.read(desktopWorkspaceProvider);
     final workspace = ref.read(desktopWorkspaceProvider.notifier);
     if (workspaceState.overviewActive) {
-      workspace.closeOverview();
+      _activateOverviewSelection();
       return;
     }
 
@@ -581,7 +590,36 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
       bounds: target.bounds,
       backgroundBounds: target.backgroundBounds,
       objectIds: target.objectIds,
+      selectedObjectId: shellState.foregroundObjectId,
     );
+  }
+
+  void _moveOverviewSelection(DesktopOverviewDirection direction) {
+    final moved = ref
+        .read(desktopWorkspaceProvider.notifier)
+        .moveOverviewSelection(direction);
+    if (moved) {
+      ref.read(hapticsServiceProvider).pulse();
+    }
+  }
+
+  void _activateOverviewSelection() {
+    final overview = ref.read(desktopWorkspaceProvider).overview;
+    if (overview == null) {
+      return;
+    }
+    final selectedObjectId = overview.selectedObjectId;
+    for (final window in ref.read(shellControllerProvider).openAppWindows) {
+      if (window.objectId == selectedObjectId) {
+        _activateWindow(window);
+        return;
+      }
+    }
+    ref.read(desktopWorkspaceProvider.notifier).closeOverview();
+  }
+
+  void _dismissOverview() {
+    ref.read(desktopWorkspaceProvider.notifier).closeOverview();
   }
 
   void _openLauncher() {
@@ -856,6 +894,9 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
           ),
         )
         .windows;
+    final layerSurfaces = ref.watch(
+      shellControllerProvider.select((state) => state.layerSurfaces),
+    );
     final animations = ref.watch(
       shellSettingsProvider.select((settings) => settings.animations),
     );
@@ -888,46 +929,53 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
       child: ColoredBox(
         color: context.shellColors.background,
         child: LayoutBuilder(
-          builder: (context, constraints) => _DesktopScene(
-            viewSize: constraints.biggest,
-            windows: windows,
-            desktop: desktop,
-            closeEffect: animations.windowCloseEffect,
-            minimizedWindowPlacement: minimizedWindowPlacement,
-            panelTravel: animations.panelTravel,
-            panelDurationScale: animations.durationScale,
-            windowSwitcher: windowSwitcher,
-            displayLayout: displayLayout,
-            frameTimingOptions: ref.watch(shellFrameTimingOptionsProvider),
-            wallpaperSelectorVisible: wallpaperSelectorVisible,
-            shellOutputRect: shellOutput?.logicalRect,
-            mainOutputRect: mainOutput?.logicalRect,
-            applicationSearchFocusNode: _applicationSearchFocusNode,
-            onOpenLauncher: _openLauncher,
-            onDismissLauncher: _closePanels,
-            onOpenDashboard: _openDashboard,
-            onOpenWallpaperSelector: _openWallpaperSelector,
-            onCloseWallpaperSelector: _closeWallpaperSelector,
-            onOpenAppVolumeManager: _openAppVolumeManager,
-            onOpenSettings: _openSettings,
-            onOpenPowerSettings: _openPowerSettings,
-            onCancelPanelClose: _cancelPanelClose,
-            onSchedulePanelClose: _schedulePanelClose,
-            onPanelOpened: _panelHoverController.openingCompleted,
-            onLaunchApp: _launchApp,
-            onLaunchLocalApp: _launchLocalApp,
-            onActivateWindow: _activateWindow,
-            onCloseWindow: ref
-                .read(shellControllerProvider.notifier)
-                .closeWindow,
-            onOverviewBarrierTap: _handleOverviewBarrierTap,
-            onBeginOverviewDrag: _beginOverviewDrag,
-            onUpdateOverviewDrag: _updateOverviewDrag,
-            onEndOverviewDrag: _endOverviewDrag,
-            onCancelOverviewDrag: _cancelOverviewDrag,
-            onCloseLeaseComplete: ref
-                .read(denialBridgeProvider)
-                .completeWindowClose,
+          builder: (context, constraints) => DesktopOverviewKeyboard(
+            active: desktop.overviewActive,
+            onNavigate: _moveOverviewSelection,
+            onActivate: _activateOverviewSelection,
+            onDismiss: _dismissOverview,
+            child: _DesktopScene(
+              viewSize: constraints.biggest,
+              windows: windows,
+              layerSurfaces: layerSurfaces,
+              desktop: desktop,
+              closeEffect: animations.windowCloseEffect,
+              minimizedWindowPlacement: minimizedWindowPlacement,
+              panelTravel: animations.panelTravel,
+              panelDurationScale: animations.durationScale,
+              windowSwitcher: windowSwitcher,
+              displayLayout: displayLayout,
+              frameTimingOptions: ref.watch(shellFrameTimingOptionsProvider),
+              wallpaperSelectorVisible: wallpaperSelectorVisible,
+              shellOutputRect: shellOutput?.logicalRect,
+              mainOutputRect: mainOutput?.logicalRect,
+              applicationSearchFocusNode: _applicationSearchFocusNode,
+              onOpenLauncher: _openLauncher,
+              onDismissLauncher: _closePanels,
+              onOpenDashboard: _openDashboard,
+              onOpenWallpaperSelector: _openWallpaperSelector,
+              onCloseWallpaperSelector: _closeWallpaperSelector,
+              onOpenAppVolumeManager: _openAppVolumeManager,
+              onOpenSettings: _openSettings,
+              onOpenPowerSettings: _openPowerSettings,
+              onCancelPanelClose: _cancelPanelClose,
+              onSchedulePanelClose: _schedulePanelClose,
+              onPanelOpened: _panelHoverController.openingCompleted,
+              onLaunchApp: _launchApp,
+              onLaunchLocalApp: _launchLocalApp,
+              onActivateWindow: _activateWindow,
+              onCloseWindow: ref
+                  .read(shellControllerProvider.notifier)
+                  .closeWindow,
+              onOverviewBarrierTap: _handleOverviewBarrierTap,
+              onBeginOverviewDrag: _beginOverviewDrag,
+              onUpdateOverviewDrag: _updateOverviewDrag,
+              onEndOverviewDrag: _endOverviewDrag,
+              onCancelOverviewDrag: _cancelOverviewDrag,
+              onCloseLeaseComplete: ref
+                  .read(denialBridgeProvider)
+                  .completeWindowClose,
+            ),
           ),
         ),
       ),

@@ -46,6 +46,7 @@ impl WireBridge {
         }
         let next_restored_window_ids = windows
             .iter()
+            .filter(|window| !window.content_kind.is_layer_shell())
             .filter_map(|window| {
                 restored_window_ids
                     .contains(&window.window_id)
@@ -328,6 +329,7 @@ impl WireBridge {
                 tap_to_click_enabled: touchpad.tap_to_click_enabled,
                 natural_scroll_enabled: touchpad.natural_scroll_enabled,
                 scroll_speed_factor: touchpad.scroll_speed_factor,
+                scrolling_layout_swipe_speed_factor: touchpad.scrolling_layout_swipe_speed_factor,
             },
         );
         let mouse = fb::MouseConfiguration::create(
@@ -536,6 +538,8 @@ fn create_window_snapshot<'a>(
                 monitor_id: description.monitor_id,
                 workspace_id: description.workspace_id,
                 minimized: description.minimized,
+                fullscreen: description.fullscreen,
+                maximized: description.maximized,
                 pinned: description.pinned,
                 transform: description.transform,
                 scale_120: description.scale_120,
@@ -704,8 +708,18 @@ fn encode_shell_action(
     validate_finished_message(builder)
 }
 
-fn validate_cursor_state(state: &CursorStateDescription) -> Result<(), WireError> {
-    if state.epoch == 0 || !state.hotspot_x.is_finite() || !state.hotspot_y.is_finite() {
+pub(super) fn validate_cursor_state(state: &CursorStateDescription) -> Result<(), WireError> {
+    validate_cursor_state_payload(state)?;
+    if state.epoch == 0 {
+        return Err(WireError::Geometry);
+    }
+    Ok(())
+}
+
+pub(super) fn validate_cursor_state_payload(
+    state: &CursorStateDescription,
+) -> Result<(), WireError> {
+    if !state.hotspot_x.is_finite() || !state.hotspot_y.is_finite() {
         return Err(WireError::Geometry);
     }
     let shape = state.shape.trim();

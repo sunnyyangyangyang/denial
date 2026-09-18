@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 
 import '../models/display_layout.dart';
+import '../models/power_button_action.dart';
 import '../models/shell_popup_placement.dart';
 import '../models/suspend_mode.dart';
 import '../state/desktop_window_close_effect.dart';
@@ -88,6 +89,7 @@ class ShellAppearanceSettings {
     this.colorSchemePreference = DesktopColorSchemePreference.preferDark,
     this.accentSource = ShellAccentSource.wallpaper,
     this.customAccentColor = ShellBrandColors.defaultAccent,
+    this.fontFamily = '',
     this.cornerRadiusScale = 0.3,
     this.panelOpacity = 0.75,
     this.cardOpacity = 0.4421052631578947,
@@ -106,6 +108,7 @@ class ShellAppearanceSettings {
   final DesktopColorSchemePreference colorSchemePreference;
   final ShellAccentSource accentSource;
   final Color customAccentColor;
+  final String fontFamily;
   final double cornerRadiusScale;
   final double panelOpacity;
   final double cardOpacity;
@@ -124,6 +127,7 @@ class ShellAppearanceSettings {
     DesktopColorSchemePreference? colorSchemePreference,
     ShellAccentSource? accentSource,
     Color? customAccentColor,
+    String? fontFamily,
     double? cornerRadiusScale,
     double? panelOpacity,
     double? cardOpacity,
@@ -143,6 +147,7 @@ class ShellAppearanceSettings {
           colorSchemePreference ?? this.colorSchemePreference,
       accentSource: accentSource ?? this.accentSource,
       customAccentColor: customAccentColor ?? this.customAccentColor,
+      fontFamily: fontFamily ?? this.fontFamily,
       cornerRadiusScale: cornerRadiusScale ?? this.cornerRadiusScale,
       panelOpacity: panelOpacity ?? this.panelOpacity,
       cardOpacity: cardOpacity ?? this.cardOpacity,
@@ -169,6 +174,7 @@ class ShellAppearanceSettings {
         other.colorSchemePreference == colorSchemePreference &&
         other.accentSource == accentSource &&
         other.customAccentColor == customAccentColor &&
+        other.fontFamily == fontFamily &&
         other.cornerRadiusScale == cornerRadiusScale &&
         other.panelOpacity == panelOpacity &&
         other.cardOpacity == cardOpacity &&
@@ -189,6 +195,7 @@ class ShellAppearanceSettings {
     colorSchemePreference,
     accentSource,
     customAccentColor,
+    fontFamily,
     cornerRadiusScale,
     panelOpacity,
     cardOpacity,
@@ -477,6 +484,7 @@ class ShellLockScreenSettings {
 @immutable
 class ShellPowerSettings {
   const ShellPowerSettings({
+    this.powerButtonAction = PowerButtonAction.dpms,
     this.idleLockEnabled = true,
     this.idleLockTimeoutMinutes = 5,
     this.idleDpmsEnabled = true,
@@ -491,6 +499,7 @@ class ShellPowerSettings {
   static const int minimumIdleDpmsMinutes = minimumIdleTimeoutMinutes;
   static const int maximumIdleDpmsMinutes = maximumIdleTimeoutMinutes;
 
+  final PowerButtonAction powerButtonAction;
   final bool idleLockEnabled;
   final int idleLockTimeoutMinutes;
   final bool idleDpmsEnabled;
@@ -500,6 +509,7 @@ class ShellPowerSettings {
   final SuspendMode suspendMode;
 
   ShellPowerSettings copyWith({
+    PowerButtonAction? powerButtonAction,
     bool? idleLockEnabled,
     int? idleLockTimeoutMinutes,
     bool? idleDpmsEnabled,
@@ -509,6 +519,7 @@ class ShellPowerSettings {
     SuspendMode? suspendMode,
   }) {
     return ShellPowerSettings(
+      powerButtonAction: powerButtonAction ?? this.powerButtonAction,
       idleLockEnabled: idleLockEnabled ?? this.idleLockEnabled,
       idleLockTimeoutMinutes:
           idleLockTimeoutMinutes ?? this.idleLockTimeoutMinutes,
@@ -525,6 +536,7 @@ class ShellPowerSettings {
   @override
   bool operator ==(Object other) {
     return other is ShellPowerSettings &&
+        other.powerButtonAction == powerButtonAction &&
         other.idleLockEnabled == idleLockEnabled &&
         other.idleLockTimeoutMinutes == idleLockTimeoutMinutes &&
         other.idleDpmsEnabled == idleDpmsEnabled &&
@@ -536,6 +548,7 @@ class ShellPowerSettings {
 
   @override
   int get hashCode => Object.hash(
+    powerButtonAction,
     idleLockEnabled,
     idleLockTimeoutMinutes,
     idleDpmsEnabled,
@@ -812,7 +825,7 @@ class ShellSettings {
 
   // Blur levels are additive in schema 9. Keep emitting the derived legacy
   // sigma so older shells can read settings written by this version.
-  static const int schemaVersion = 25;
+  static const int schemaVersion = 27;
 
   final ShellLocalizationSettings localization;
   final ShellAppearanceSettings appearance;
@@ -875,6 +888,9 @@ class ShellSettings {
       }
       if (appearance.customAccentColor != before.customAccentColor) {
         section['customAccentColor'] = appearance.customAccentColor.toARGB32();
+      }
+      if (appearance.fontFamily != before.fontFamily) {
+        section['fontFamily'] = appearance.fontFamily;
       }
       if (appearance.cornerRadiusScale != before.cornerRadiusScale) {
         section['cornerRadiusScale'] = appearance.cornerRadiusScale;
@@ -1030,6 +1046,9 @@ class ShellSettings {
     if (power != previous.power) {
       final before = previous.power;
       final section = <String, Object?>{};
+      if (power.powerButtonAction != before.powerButtonAction) {
+        section['powerButtonAction'] = power.powerButtonAction.name;
+      }
       if (power.idleLockEnabled != before.idleLockEnabled) {
         section['idleLockEnabled'] = power.idleLockEnabled;
       }
@@ -1071,6 +1090,7 @@ class ShellSettings {
         'colorSchemePreference': appearance.colorSchemePreference.name,
         'accentSource': appearance.accentSource.name,
         'customAccentColor': appearance.customAccentColor.toARGB32(),
+        'fontFamily': appearance.fontFamily,
         'cornerRadiusScale': appearance.cornerRadiusScale,
         'panelOpacity': appearance.panelOpacity,
         'cardOpacity': appearance.cardOpacity,
@@ -1121,6 +1141,7 @@ class ShellSettings {
         'showSystemStatus': lockScreen.showSystemStatus,
       },
       'power': <String, Object>{
+        'powerButtonAction': power.powerButtonAction.name,
         'idleLockEnabled': power.idleLockEnabled,
         'idleLockTimeoutMinutes': power.idleLockTimeoutMinutes,
         'idleDpmsEnabled': power.idleDpmsEnabled,
@@ -1240,6 +1261,10 @@ class ShellSettings {
         customAccentColor: _color(
           appearanceJson['customAccentColor'],
           defaults.appearance.customAccentColor,
+        ),
+        fontFamily: _fontFamily(
+          appearanceJson['fontFamily'],
+          defaults.appearance.fontFamily,
         ),
         cornerRadiusScale: _number(
           appearanceJson['cornerRadiusScale'],
@@ -1441,6 +1466,11 @@ class ShellSettings {
             : defaults.lockScreen.showSystemStatus,
       ),
       power: ShellPowerSettings(
+        powerButtonAction: _enumValue(
+          PowerButtonAction.values,
+          powerJson['powerButtonAction'],
+          defaults.power.powerButtonAction,
+        ),
         idleLockEnabled: powerJson['idleLockEnabled'] is bool
             ? powerJson['idleLockEnabled'] as bool
             : defaults.power.idleLockEnabled,
@@ -1489,6 +1519,18 @@ class ShellSettings {
     power,
     applicationEnvironment,
   );
+}
+
+String _fontFamily(Object? value, String fallback) {
+  if (value is! String) {
+    return fallback;
+  }
+  final family = value.trim();
+  if (family.length > maximumShellFontFamilyLength ||
+      family.runes.any((rune) => rune < 0x20 || rune == 0x7f)) {
+    return fallback;
+  }
+  return family;
 }
 
 Map<String, Object> _placementToJson(ShellPopupPlacement placement) {

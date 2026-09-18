@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config/startup_environment.dart';
 import '../models/display_layout.dart';
+import '../models/power_button_action.dart';
 import '../models/shell_popup_placement.dart';
 import '../models/suspend_mode.dart';
 import '../state/desktop_window_close_effect.dart';
@@ -201,6 +202,15 @@ class ShellSettingsController extends Notifier<ShellSettings> {
         ),
       ),
     );
+  }
+
+  void setFontFamily(String value) {
+    final family = value.trim();
+    if (family.length > maximumShellFontFamilyLength ||
+        family.runes.any((rune) => rune < 0x20 || rune == 0x7f)) {
+      return;
+    }
+    _updateAppearance(fontFamily: family);
   }
 
   void setCornerRadiusScale(double value) {
@@ -443,6 +453,12 @@ class ShellSettingsController extends Notifier<ShellSettings> {
     );
   }
 
+  void setPowerButtonAction(PowerButtonAction value) {
+    _update(
+      state.copyWith(power: state.power.copyWith(powerButtonAction: value)),
+    );
+  }
+
   void setIdleLockTimeoutMinutes(int value) {
     _update(
       state.copyWith(
@@ -652,6 +668,7 @@ class ShellSettingsController extends Notifier<ShellSettings> {
   }
 
   void _updateAppearance({
+    String? fontFamily,
     double? cornerRadiusScale,
     double? panelOpacity,
     double? cardOpacity,
@@ -669,6 +686,7 @@ class ShellSettingsController extends Notifier<ShellSettings> {
     _update(
       state.copyWith(
         appearance: state.appearance.copyWith(
+          fontFamily: fontFamily,
           cornerRadiusScale: cornerRadiusScale,
           panelOpacity: panelOpacity,
           cardOpacity: cardOpacity,

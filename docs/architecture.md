@@ -132,10 +132,11 @@ unit.
   physical keys remain on the Smithay seat.
 - one external input-method client may bind `zwp_input_method_v2` for the seat;
   later contenders receive `unavailable`, and its `zwp_virtual_keyboard_v1`
-  companion is accepted only from that same Wayland client. Rust bridges its
-  keyboard grab, loop-safe key pass-through, and editing transactions to the
-  active endpoint, while candidate surfaces join the same Flutter scene and
-  native input layout.
+  companion is accepted only from that same Wayland client. Its keyboard grab
+  and loop-safe key pass-through stay on the Smithay seat: Flutter participates
+  as a real keyboard focus target alongside Wayland and Xwayland, while editing
+  transactions use the active text endpoint. Candidate surfaces join the same
+  Flutter scene and native input layout.
 
 Rust also owns one live XKB configuration for that seat. The same map and
 repeat metadata reach native Wayland clients and Xwayland; Flutter physical
@@ -145,9 +146,10 @@ repeat timer. `Super+Space` selects the next configured layout and
 available and publish the resulting active layout back to the shell.
 
 The endpoint broker keeps keyboard focus, shell capture, editor activation,
-and Flutter engine lifetime as separate state. Flutter is an endpoint adapter,
-not a fabricated Wayland surface. The full Wayland contract is documented in
-[Wayland text input v3](protocol/text-input-v3.md).
+and Flutter engine lifetime as separate state. Flutter is a compositor-owned
+seat focus target and text endpoint adapter, not a fabricated Wayland surface.
+The full Wayland contract is documented in [Wayland text input
+v3](protocol/text-input-v3.md).
 
 ## Settings
 
@@ -223,14 +225,19 @@ Touchpad preferences live in the native-owned `touchpad` section:
 {
   "touchpad": {
     "tapToClickEnabled": true,
-    "naturalScrollEnabled": false
+    "naturalScrollEnabled": false,
+    "scrollSpeedFactor": 1.0,
+    "scrollingLayoutSwipeSpeedFactor": 1.0
   }
 }
 ```
 
-Denial applies these preferences through libinput when a touchpad appears and
-on every live update. The shell receives touchpad presence separately so it
-only exposes the touchpad page when suitable hardware is connected.
+Denial applies the device preferences through libinput when a touchpad appears
+and on every live update. The scrolling-layout swipe factor instead scales only
+the compositor-owned continuous three-finger gesture, including its release
+projection; it does not affect two-finger content scrolling or shortcut swipes.
+The shell receives touchpad presence separately so controls are disabled when
+no suitable hardware is connected.
 
 ## Desktop Settings portal
 

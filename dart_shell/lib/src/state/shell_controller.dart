@@ -302,7 +302,10 @@ class ShellController extends Notifier<ShellState>
       do {
         _refreshQueued = false;
         try {
-          final snapshot = await _bridge.listWindows(state.windows);
+          final snapshot = await _bridge.listWindows(<DenialWindow>[
+            ...state.windows,
+            ...state.layerSurfaces,
+          ]);
           if (!isBuildGenerationActive(generation)) {
             return;
           }
@@ -327,9 +330,15 @@ class ShellController extends Notifier<ShellState>
       return;
     }
 
-    final windows = snapshot.windows;
+    final windows = snapshot.windows
+        .where((window) => !window.isLayerShell)
+        .toList(growable: false);
+    final layerSurfaces = snapshot.windows
+        .where((window) => window.isLayerShell)
+        .toList(growable: false);
     if (_hasLoadedWindowSnapshot &&
-        _sameWindowSnapshots(state.windows, windows)) {
+        _sameWindowSnapshots(state.windows, windows) &&
+        _sameWindowSnapshots(state.layerSurfaces, layerSurfaces)) {
       if (snapshot.sequence > state.windowSnapshotSequence) {
         state = state.copyWith(windowSnapshotSequence: snapshot.sequence);
       }
@@ -338,6 +347,7 @@ class ShellController extends Notifier<ShellState>
 
     _hasLoadedWindowSnapshot = true;
     final stableWindows = List<DenialWindow>.unmodifiable(windows);
+    final stableLayerSurfaces = List<DenialWindow>.unmodifiable(layerSurfaces);
     final request = state.launchRequest;
     final launchWindow = request == null
         ? null
@@ -350,6 +360,7 @@ class ShellController extends Notifier<ShellState>
       _gestureAxis = _GestureAxis.undecided;
       state = state.copyWith(
         windows: stableWindows,
+        layerSurfaces: stableLayerSurfaces,
         windowSnapshotSequence: snapshot.sequence,
         overviewVisible: false,
         gestureDrag: Offset.zero,
@@ -377,6 +388,7 @@ class ShellController extends Notifier<ShellState>
 
     state = state.copyWith(
       windows: stableWindows,
+      layerSurfaces: stableLayerSurfaces,
       windowSnapshotSequence: snapshot.sequence,
       clearForegroundObjectId: !foregroundStillVisible,
       clearLaunchingObjectId: !launchingStillVisible,

@@ -15,6 +15,7 @@ import '../models/keyboard_configuration.dart';
 import '../models/output_configuration.dart';
 import '../models/shortcut_configuration.dart';
 import '../models/system_tray_item.dart';
+import '../models/power_button_action.dart';
 import '../models/suspend_mode.dart';
 import '../models/denial_window.dart';
 import '../models/denial_window_event.dart';
@@ -38,6 +39,10 @@ enum DenialShellAction {
   wallpaper,
   openSettings,
   workspaceChanged,
+  focusLeft,
+  focusRight,
+  focusUp,
+  focusDown,
 }
 
 class DenialShellActionEvent {
@@ -1628,6 +1633,7 @@ class DenialBridge {
 
   /// Configures the compositor-owned lock, DPMS, and suspend idle policy.
   void setIdlePolicy({
+    required PowerButtonAction powerButtonAction,
     required bool lockEnabled,
     required Duration lockTimeout,
     required bool dpmsEnabled,
@@ -1651,9 +1657,10 @@ class DenialBridge {
         (dpmsEnabled ? 2 : 0) |
         (suspendEnabled ? 4 : 0);
     final data = ByteData(32)
-      ..setUint8(0, 2)
+      ..setUint8(0, 3)
       ..setUint8(1, flags)
       ..setUint8(2, suspendMode.wireValue)
+      ..setUint8(3, powerButtonAction.wireValue)
       ..setUint64(8, lockMilliseconds, Endian.little)
       ..setUint64(16, dpmsMilliseconds, Endian.little)
       ..setUint64(24, suspendMilliseconds, Endian.little);
@@ -2613,6 +2620,10 @@ class DenialBridge {
           wire.ShellActionKind.OpenSettings => DenialShellAction.openSettings,
           wire.ShellActionKind.WorkspaceChanged =>
             DenialShellAction.workspaceChanged,
+          wire.ShellActionKind.FocusLeft => DenialShellAction.focusLeft,
+          wire.ShellActionKind.FocusRight => DenialShellAction.focusRight,
+          wire.ShellActionKind.FocusUp => DenialShellAction.focusUp,
+          wire.ShellActionKind.FocusDown => DenialShellAction.focusDown,
         };
         if (!_shellActions.isClosed) {
           _shellActions.add(
@@ -2851,6 +2862,7 @@ class DenialBridge {
       final action = switch (event.action) {
         wire.WindowActionKind.Minimize => DenialWindowAction.minimize,
         wire.WindowActionKind.Maximize => DenialWindowAction.maximize,
+        wire.WindowActionKind.Fullscreen => DenialWindowAction.fullscreen,
         wire.WindowActionKind.Restore => DenialWindowAction.restore,
         wire.WindowActionKind.ToggleMaximize =>
           DenialWindowAction.toggleMaximize,

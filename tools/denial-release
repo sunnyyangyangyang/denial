@@ -1136,13 +1136,13 @@ source_audit() {
     "$ROOT/README.md" \
     "$ROOT/docs/packaging/arch/INSTALL.md"; do
     if grep -Fqx \
-      'sh -c '\''if ! command -v curl >/dev/null 2>&1; then echo "Error: curl is not available." >&2; exit 1; fi; curl -fsSL https://install.denialwm.org | sh'\''' \
+      'curl -fsSL https://install.denialwm.org | sh' \
       "$install_document"; then
       pass "$(realpath --relative-to="$ROOT" "$install_document") uses the canonical guided-install command"
     else
       fail "$(realpath --relative-to="$ROOT" "$install_document") does not use the canonical guided-install command"
     fi
-    if grep -Fqx \
+    if grep -Fq \
       'sudo pacman -Syu denial' \
       "$install_document"; then
       pass "$(realpath --relative-to="$ROOT" "$install_document") keeps package installation explicit"

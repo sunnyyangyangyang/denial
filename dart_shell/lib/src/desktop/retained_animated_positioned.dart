@@ -14,6 +14,7 @@ class RetainedAnimatedPositioned extends ImplicitlyAnimatedWidget {
     required this.child,
     this.layoutRect,
     this.animationOrigin,
+    this.globalClipRect,
     this.layoutDuringAnimation = false,
     required super.duration,
     super.curve,
@@ -31,6 +32,12 @@ class RetainedAnimatedPositioned extends ImplicitlyAnimatedWidget {
   /// the transform can be removed while its absolute visual rectangle becomes
   /// the position tween's origin, avoiding a one-frame snap.
   final Rect? animationOrigin;
+
+  /// Keeps the retained child inside a stationary scene-space viewport.
+  ///
+  /// The clip is resolved against [layoutRect] on every animation tick, so it
+  /// stays fixed while the child translates or scales underneath it.
+  final Rect? globalClipRect;
   final bool layoutDuringAnimation;
 
   @override
@@ -79,13 +86,32 @@ class _RetainedAnimatedPositionedState
         : (Matrix4.diagonal3Values(scaleX, scaleY, 1)
             ..setTranslationRaw(translation.dx, translation.dy, 0));
 
-    return Positioned.fromRect(
-      rect: layoutRect,
-      child: Transform(
-        transform: transform,
-        transformHitTests: true,
-        child: widget.child,
-      ),
+    Widget child = Transform(
+      transform: transform,
+      transformHitTests: true,
+      child: widget.child,
     );
+    if (widget.globalClipRect case final globalClipRect?) {
+      child = ClipRect(
+        clipper: _SceneRectClipper(globalClipRect.shift(-layoutRect.topLeft)),
+        clipBehavior: Clip.hardEdge,
+        child: child,
+      );
+    }
+
+    return Positioned.fromRect(rect: layoutRect, child: child);
   }
+}
+
+class _SceneRectClipper extends CustomClipper<Rect> {
+  const _SceneRectClipper(this.rect);
+
+  final Rect rect;
+
+  @override
+  Rect getClip(Size size) => rect;
+
+  @override
+  bool shouldReclip(covariant _SceneRectClipper oldClipper) =>
+      oldClipper.rect != rect;
 }

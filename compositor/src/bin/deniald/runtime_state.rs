@@ -102,6 +102,9 @@ pub(super) struct RuntimeState {
     pub(super) output_control: Option<output_control::OutputControlPublisher>,
     #[cfg(feature = "flutter")]
     pub(super) dpms_topology: dpms::DpmsTopologyGuard,
+    #[cfg(feature = "flutter")]
+    pub(super) sleep_transition: sleep_transition::SleepTransitionState,
+    #[cfg(feature = "flutter")]
     pub(super) pending_ui_development: VecDeque<PendingUiDevelopment>,
     #[cfg(feature = "flutter")]
     pub(super) idle_policy: idle_policy::IdlePolicy,
@@ -192,8 +195,12 @@ impl RuntimeState {
         self.restored_window_ids
             .extend(self.published_window_ids.drain());
         self.flutter_input.resize(size);
-        if let Some(frontend) = self.wayland.as_mut() {
-            frontend.reset_flutter_input_generation();
+        let restore_shell_focus = self
+            .wayland
+            .as_mut()
+            .is_some_and(|frontend| frontend.reset_flutter_input_generation());
+        if restore_shell_focus {
+            wayland_frontend::restore_shell_keyboard_focus(self);
         }
         self.synchronize_flutter_pointer_position();
         self.flutter_channel_closed = false;

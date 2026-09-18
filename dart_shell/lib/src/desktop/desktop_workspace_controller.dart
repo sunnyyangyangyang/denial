@@ -1,5 +1,12 @@
 part of 'desktop_workspace.dart';
 
+class _NativeWindowRevisions {
+  _NativeWindowRevisions({required this.geometry, required this.metadata});
+
+  int geometry;
+  int metadata;
+}
+
 final desktopWorkspaceProvider =
     NotifierProvider<DesktopWorkspaceController, DesktopWorkspaceState>(
       DesktopWorkspaceController.new,
@@ -10,10 +17,17 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
   DesktopWorkspaceState build() => DesktopWorkspaceState.initial();
 
   final Map<int, Offset> _moveRemainders = <int, Offset>{};
-  final Map<int, Rect> _pendingNativeFrames = <int, Rect>{};
-  // Native ordering prevents stale placement events but has no visual effect,
-  // so keep it outside provider state and its widget rebuild boundary.
-  final Map<int, int> _nativeSequences = <int, int>{};
+  // Rectangles initiated by a real Flutter interaction may be presented
+  // optimistically until the compositor acknowledges them. Compositor action
+  // notifications must never populate this map: their authoritative geometry
+  // is already on the native snapshot/placement stream.
+  final Map<int, Rect> _pendingFlutterProposedFrames = <int, Rect>{};
+  // Geometry packets are frame-batched while ownership/state snapshots are
+  // immediate. They therefore require independent revision clocks: one newer
+  // metadata snapshot must neither discard queued geometry nor let that older
+  // geometry revert output/workspace ownership when it is finally reduced.
+  final Map<int, _NativeWindowRevisions> _nativeRevisions =
+      <int, _NativeWindowRevisions>{};
   final Map<int, ({Rect frame, int z})> _overviewDragOrigins =
       <int, ({Rect frame, int z})>{};
   List<DenialWindow>? _lastSyncedWindows;
@@ -111,7 +125,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       }
       final frame = _maximizedFrame(placement.monitorId, state.viewSize);
       if (frame != placement.frame) {
-        _pendingNativeFrames[placement.objectId] = frame;
+        _pendingFlutterProposedFrames[placement.objectId] = frame;
         next[placement.objectId] = placement.copyWith(frame: frame);
         changed = true;
       }
@@ -160,10 +174,10 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     final userWindows = windows.where((window) => window.isUserApp).toList();
     final activeIds = {for (final window in userWindows) window.objectId};
     _moveRemainders.removeWhere((objectId, _) => !activeIds.contains(objectId));
-    _pendingNativeFrames.removeWhere(
+    _pendingFlutterProposedFrames.removeWhere(
       (objectId, _) => !activeIds.contains(objectId),
     );
-    _nativeSequences.removeWhere(
+    _nativeRevisions.removeWhere(
       (objectId, _) => !activeIds.contains(objectId),
     );
     final next = <int, DesktopWindowPlacement>{
@@ -182,30 +196,70 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         }
         next[window.objectId] = DesktopWindowPlacement(
           objectId: window.objectId,
-          frame: _initialFrame(
-            nativeGeometry,
-            serverSideDecorated: window.serverSideDecorated,
-          ),
+          frame: window.fullscreen
+              ? nativeGeometry.intersect(Offset.zero & viewSize)
+              : _initialFrame(
+                  nativeGeometry,
+                  serverSideDecorated: window.serverSideDecorated,
+                ),
           z: nextZ++,
           monitorId: window.monitorId,
           workspaceId: window.workspaceId,
           minimized: window.minimized,
+          maximized: window.maximized,
+          fullscreen: window.fullscreen,
           serverSideDecorated: window.serverSideDecorated,
         );
-        _nativeSequences[window.objectId] = snapshotSequence;
+        _nativeRevisions[window.objectId] = _NativeWindowRevisions(
+          geometry: snapshotSequence,
+          metadata: snapshotSequence,
+        );
         changed = true;
         continue;
       }
 
       var current = existing;
       final nativeGeometry = window.geometry;
-      if (snapshotSequence > (_nativeSequences[window.objectId] ?? 0)) {
-        _nativeSequences[window.objectId] = snapshotSequence;
+      final revisions = _nativeRevisions.putIfAbsent(
+        window.objectId,
+        () => _NativeWindowRevisions(geometry: 0, metadata: 0),
+      );
+      final geometryIsNew = snapshotSequence > revisions.geometry;
+      final metadataIsNew = snapshotSequence > revisions.metadata;
+      if (geometryIsNew || metadataIsNew) {
         var frame = existing.frame;
         var fullscreenRestoreFrame = existing.fullscreenRestoreFrame;
         var monitorId = existing.monitorId;
+        var consumedNativeGeometry = false;
+        // Local Flutter windows own their state in this controller. Managed
+        // protocol clients have already been normalized by the compositor and
+        // must all consume the same authoritative state fields here.
+        final nativeFullscreen = window.isLocalFlutter
+            ? existing.fullscreen
+            : metadataIsNew
+            ? window.fullscreen
+            : existing.fullscreen;
+        final nativeMaximized = window.isLocalFlutter
+            ? existing.maximized
+            : metadataIsNew
+            ? window.maximized
+            : existing.maximized;
+        final nativeServerSideDecorated = metadataIsNew
+            ? window.serverSideDecorated
+            : existing.serverSideDecorated;
+        final nativeMonitorId = metadataIsNew
+            ? window.monitorId
+            : existing.monitorId;
+        if (metadataIsNew) {
+          // Output and workspace are one ownership record. Never hold one
+          // half back behind an unrelated geometry acknowledgement.
+          monitorId = nativeMonitorId;
+        }
+        if (nativeFullscreen && !existing.fullscreen) {
+          fullscreenRestoreFrame ??= existing.frame;
+        }
         final decorationChanged =
-            existing.serverSideDecorated != window.serverSideDecorated;
+            existing.serverSideDecorated != nativeServerSideDecorated;
         // Rust owns geometry throughout a native grab. A presentation or
         // metadata snapshot (for example, an animating title) can carry the
         // latest native rectangle before Flutter receives the matching
@@ -213,21 +267,22 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         // rectangle with the retained live-move delta and visibly apply the
         // motion twice. Placement packets remain the only geometry authority
         // until their end phase commits the final frame.
-        if (!existing.dragging &&
+        if (geometryIsNew &&
+            !existing.dragging &&
             !existing.layoutPreviewing &&
             nativeGeometry != null) {
-          final nativeFrame = existing.fullscreen
+          final nativeFrame = nativeFullscreen
               ? nativeGeometry.intersect(Offset.zero & viewSize)
               : _initialFrame(
                   nativeGeometry,
-                  serverSideDecorated: window.serverSideDecorated,
+                  serverSideDecorated: nativeServerSideDecorated,
                 );
-          final pendingFrame = _pendingNativeFrames[window.objectId];
+          final pendingFrame = _pendingFlutterProposedFrames[window.objectId];
           final nativeAcknowledgedPending =
               pendingFrame != null &&
               _framesApproximatelyEqual(nativeFrame, pendingFrame);
           if (nativeAcknowledgedPending) {
-            _pendingNativeFrames.remove(window.objectId);
+            _pendingFlutterProposedFrames.remove(window.objectId);
           }
 
           // Shell-authored maximize/restore geometry crosses the native bridge
@@ -236,42 +291,53 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
           // its monitor ownership until Rust echoes the complete rectangle.
           if (pendingFrame == null || nativeAcknowledgedPending) {
             if (!nativeFrame.isEmpty) {
-              if (existing.fullscreen &&
-                  window.monitorId != existing.monitorId) {
+              if (nativeFullscreen && nativeMonitorId != existing.monitorId) {
                 final delta = nativeFrame.topLeft - existing.frame.topLeft;
                 fullscreenRestoreFrame = fullscreenRestoreFrame?.shift(delta);
               }
               frame = nativeFrame;
-              monitorId = window.monitorId;
+              consumedNativeGeometry = true;
             }
           }
         } else if (!existing.dragging &&
             !existing.layoutPreviewing &&
             decorationChanged &&
-            !existing.fullscreen) {
+            !nativeFullscreen) {
           frame = _initialFrame(
             existing.contentRect,
-            serverSideDecorated: window.serverSideDecorated,
+            serverSideDecorated: nativeServerSideDecorated,
           );
-          monitorId = window.monitorId;
-        } else if (!existing.dragging &&
-            !existing.layoutPreviewing &&
-            _pendingNativeFrames[window.objectId] == null) {
-          monitorId = window.monitorId;
         }
         current = existing.copyWith(
           frame: frame,
           monitorId: monitorId,
-          serverSideDecorated: window.serverSideDecorated,
-          workspaceId: window.workspaceId,
-          minimized: window.minimized,
+          serverSideDecorated: nativeServerSideDecorated,
+          workspaceId: metadataIsNew
+              ? window.workspaceId
+              : existing.workspaceId,
+          minimized: metadataIsNew ? window.minimized : existing.minimized,
+          maximized: nativeMaximized,
+          fullscreen: nativeFullscreen,
           fullscreenRestoreFrame: fullscreenRestoreFrame,
+          clearFullscreenRestoreFrame: !nativeFullscreen && existing.fullscreen,
         );
+        // A scene snapshot can overtake frame-batched scrolling placement
+        // packets. Only advance the geometry sequence when this snapshot
+        // actually consumed its rectangle; otherwise those packets must stay
+        // eligible to move every tile with the layout viewport.
+        if (consumedNativeGeometry) {
+          revisions.geometry = snapshotSequence;
+        }
+        if (metadataIsNew) {
+          revisions.metadata = snapshotSequence;
+        }
         if (current.frame != existing.frame ||
             current.monitorId != existing.monitorId ||
             current.serverSideDecorated != existing.serverSideDecorated ||
             current.workspaceId != existing.workspaceId ||
             current.minimized != existing.minimized ||
+            current.maximized != existing.maximized ||
+            current.fullscreen != existing.fullscreen ||
             current.fullscreenRestoreFrame != existing.fullscreenRestoreFrame) {
           next[window.objectId] = current;
           changed = true;
@@ -288,7 +354,12 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
           ? _maximizedFrame(current.monitorId, viewSize)
           : _clampFrame(current.frame, viewSize);
       if (frame != current.frame) {
-        _pendingNativeFrames[window.objectId] = frame;
+        // A metrics change reaches Flutter before the matching native scene
+        // snapshot. This clamp is only a safe interim presentation of the old
+        // rectangle; it was not sent to the compositor as a geometry request.
+        // Recording it as pending would reject the authoritative re-tiled
+        // rectangle when that snapshot arrives, leaving the client texture
+        // permanently stretched into this stale frame.
         next[window.objectId] = current.copyWith(frame: frame);
         changed = true;
       }
@@ -329,6 +400,12 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
             monitorId: nextOverview.monitorId,
             bounds: nextOverview.bounds,
             backgroundBounds: nextOverview.backgroundBounds,
+            selectedObjectId: frames.containsKey(nextOverview.selectedObjectId)
+                ? nextOverview.selectedObjectId
+                : _nearestOverviewObjectId(
+                    frames,
+                    nextOverview.frames[nextOverview.selectedObjectId]?.center,
+                  ),
             frames: frames,
           );
         }
@@ -391,6 +468,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     required Rect bounds,
     required Rect backgroundBounds,
     Set<int>? objectIds,
+    int? selectedObjectId,
   }) {
     if (state.overviewActive) {
       closeOverview();
@@ -422,6 +500,10 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     if (frames.isEmpty) {
       return;
     }
+    final fallbackSelection = items
+        .where((item) => frames.containsKey(item.objectId))
+        .reduce((left, right) => left.z >= right.z ? left : right)
+        .objectId;
 
     state = state.copyWith(
       placements: settledPlacements,
@@ -430,9 +512,31 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         monitorId: monitorId,
         bounds: bounds,
         backgroundBounds: backgroundBounds,
+        selectedObjectId: frames.containsKey(selectedObjectId)
+            ? selectedObjectId!
+            : fallbackSelection,
         frames: frames,
       ),
     );
+  }
+
+  bool moveOverviewSelection(DesktopOverviewDirection direction) {
+    final overview = state.overview;
+    if (overview == null) {
+      return false;
+    }
+    final selectedObjectId = desktopOverviewNeighbor(
+      frames: overview.frames,
+      fromObjectId: overview.selectedObjectId,
+      direction: direction,
+    );
+    if (selectedObjectId == null) {
+      return false;
+    }
+    state = state.copyWith(
+      overview: overview.copyWith(selectedObjectId: selectedObjectId),
+    );
+    return true;
   }
 
   void closeOverview() {
@@ -481,14 +585,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     }
     final frames = Map<int, Rect>.of(overview.frames);
     frames[objectId] = _clampFrame(previewFrame.shift(delta), state.viewSize);
-    state = state.copyWith(
-      overview: DesktopOverviewState(
-        monitorId: overview.monitorId,
-        bounds: overview.bounds,
-        backgroundBounds: overview.backgroundBounds,
-        frames: frames,
-      ),
-    );
+    state = state.copyWith(overview: overview.copyWith(frames: frames));
   }
 
   bool endOverviewDrag(
@@ -563,7 +660,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       fullscreenRestoreFrame: fullscreenRestoreFrame,
     );
     next[objectId] = transferred;
-    _pendingNativeFrames[objectId] = destinationFrame;
+    _pendingFlutterProposedFrames[objectId] = destinationFrame;
     _overviewDragOrigins.clear();
     state = state.copyWith(placements: next, clearOverview: true);
     return true;
@@ -593,13 +690,22 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     next[objectId] = placement.copyWith(z: origin?.z, dragging: false);
     state = state.copyWith(
       placements: next,
-      overview: DesktopOverviewState(
-        monitorId: overview.monitorId,
-        bounds: overview.bounds,
-        backgroundBounds: overview.backgroundBounds,
-        frames: frames,
-      ),
+      overview: overview.copyWith(frames: frames),
     );
+  }
+
+  int _nearestOverviewObjectId(Map<int, Rect> frames, Offset? origin) {
+    if (origin == null) {
+      return frames.keys.first;
+    }
+    return frames.entries.reduce((left, right) {
+      final leftDistance = (left.value.center - origin).distanceSquared;
+      final rightDistance = (right.value.center - origin).distanceSquared;
+      if (leftDistance != rightDistance) {
+        return leftDistance < rightDistance ? left : right;
+      }
+      return left.key < right.key ? left : right;
+    }).key;
   }
 
   void moveBy(int objectId, Offset delta) {
@@ -640,7 +746,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     }
     final next = Map<int, DesktopWindowPlacement>.of(state.placements);
     next[objectId] = placement.copyWith(frame: frame);
-    _pendingNativeFrames[objectId] = frame;
+    _pendingFlutterProposedFrames[objectId] = frame;
     state = state.copyWith(placements: next);
   }
 
@@ -681,53 +787,64 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     }
     final layoutPreview =
         event.change == DenialWindowPlacementChange.layoutPreview;
-    if (event.phase == DenialWindowPlacementPhase.begin && !layoutPreview) {
-      activate(objectId);
-    }
     final placement = state.placements[objectId];
-    if (placement == null ||
-        event.sequence <= (_nativeSequences[objectId] ?? 0)) {
+    if (placement == null) {
       return false;
     }
-    _pendingNativeFrames.remove(objectId);
+    final revisions = _nativeRevisions.putIfAbsent(
+      objectId,
+      () => _NativeWindowRevisions(geometry: 0, metadata: 0),
+    );
+    final geometryIsNew = event.sequence > revisions.geometry;
+    final metadataIsNew = event.sequence > revisions.metadata;
+    if (!geometryIsNew && !metadataIsNew) {
+      return false;
+    }
+    if (event.phase == DenialWindowPlacementPhase.begin &&
+        !layoutPreview &&
+        geometryIsNew) {
+      activate(objectId);
+    }
+    if (geometryIsNew) {
+      _pendingFlutterProposedFrames.remove(objectId);
+    }
 
-    final monitorChanged = event.monitorId != placement.monitorId;
+    final monitorChanged =
+        metadataIsNew && event.monitorId != placement.monitorId;
 
     if (placement.fullscreen) {
-      final transferActive = monitorChanged || placement.dragging;
-      if (!transferActive) {
-        final next = Map<int, DesktopWindowPlacement>.of(state.placements);
-        next[objectId] = placement.copyWith(
-          monitorId: event.monitorId,
-          workspaceId: event.workspaceId,
-        );
-        _nativeSequences[objectId] = event.sequence;
-        state = state.copyWith(placements: next);
-        return true;
-      }
       final fullscreenFrame = event.contentRect.intersect(
         Offset.zero & state.viewSize,
       );
-      if (fullscreenFrame.isEmpty) {
+      if (geometryIsNew && fullscreenFrame.isEmpty) {
         return false;
       }
       final delta = fullscreenFrame.topLeft - placement.frame.topLeft;
       final next = Map<int, DesktopWindowPlacement>.of(state.placements);
       next[objectId] = placement.copyWith(
-        frame: fullscreenFrame,
-        monitorId: event.monitorId,
-        workspaceId: event.workspaceId,
-        dragging: layoutPreview
-            ? placement.dragging
-            : event.phase != DenialWindowPlacementPhase.end,
-        layoutPreviewing: layoutPreview
-            ? event.phase != DenialWindowPlacementPhase.end
+        frame: geometryIsNew ? fullscreenFrame : placement.frame,
+        monitorId: metadataIsNew ? event.monitorId : placement.monitorId,
+        workspaceId: metadataIsNew ? event.workspaceId : placement.workspaceId,
+        dragging: geometryIsNew
+            ? layoutPreview
+                  ? placement.dragging
+                  : event.phase != DenialWindowPlacementPhase.end
+            : placement.dragging,
+        layoutPreviewing: geometryIsNew
+            ? layoutPreview
+                  ? event.phase != DenialWindowPlacementPhase.end
+                  : placement.layoutPreviewing
             : placement.layoutPreviewing,
         fullscreenRestoreFrame: monitorChanged
             ? placement.fullscreenRestoreFrame?.shift(delta)
             : placement.fullscreenRestoreFrame,
       );
-      _nativeSequences[objectId] = event.sequence;
+      if (geometryIsNew) {
+        revisions.geometry = event.sequence;
+      }
+      if (metadataIsNew) {
+        revisions.metadata = event.sequence;
+      }
       state = state.copyWith(placements: next);
       return true;
     }
@@ -735,33 +852,81 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     // This is compositor-owned geometry. Mirror it exactly, including
     // intentional off-screen popup animation, rather than applying another
     // Flutter-side placement policy.
-    final frame = _initialFrame(
-      event.contentRect,
-      serverSideDecorated: placement.serverSideDecorated,
-    );
+    final frame = geometryIsNew
+        ? _initialFrame(
+            event.contentRect,
+            serverSideDecorated: placement.serverSideDecorated,
+          )
+        : placement.frame;
     final next = Map<int, DesktopWindowPlacement>.of(state.placements);
     next[objectId] = placement.copyWith(
       frame: frame,
-      monitorId: event.monitorId,
-      workspaceId: event.workspaceId,
-      minimized: false,
-      maximized: false,
-      fullscreen: false,
-      dragging: layoutPreview
-          ? placement.dragging
-          : event.phase != DenialWindowPlacementPhase.end,
-      layoutPreviewing: layoutPreview
-          ? event.phase != DenialWindowPlacementPhase.end
+      monitorId: metadataIsNew ? event.monitorId : placement.monitorId,
+      workspaceId: metadataIsNew ? event.workspaceId : placement.workspaceId,
+      minimized: metadataIsNew ? false : placement.minimized,
+      maximized: metadataIsNew ? false : placement.maximized,
+      fullscreen: metadataIsNew ? false : placement.fullscreen,
+      dragging: geometryIsNew
+          ? layoutPreview
+                ? placement.dragging
+                : event.phase != DenialWindowPlacementPhase.end
+          : placement.dragging,
+      layoutPreviewing: geometryIsNew
+          ? layoutPreview
+                ? event.phase != DenialWindowPlacementPhase.end
+                : placement.layoutPreviewing
           : placement.layoutPreviewing,
-      clearRestoreFrame: true,
-      clearFullscreenRestoreFrame: true,
+      clearRestoreFrame: metadataIsNew,
+      clearFullscreenRestoreFrame: metadataIsNew,
     );
-    _nativeSequences[objectId] = event.sequence;
+    if (geometryIsNew) {
+      revisions.geometry = event.sequence;
+    }
+    if (metadataIsNew) {
+      revisions.metadata = event.sequence;
+    }
     state = state.copyWith(placements: next);
     return true;
   }
 
-  void minimize(int objectId) {
+  /// Applies an action only when Flutter owns the window implementation.
+  ///
+  /// Protocol-backed windows have already been changed by Rust before their
+  /// action notification arrives. Returning false for them prevents the Dart
+  /// presentation model from inventing a competing geometry transaction.
+  bool applyFlutterOwnedWindowAction(
+    DenialWindow window,
+    DenialWindowAction action, {
+    required Rect maximizeBounds,
+    required Rect fullscreenBounds,
+  }) {
+    if (!window.isLocalFlutter) {
+      return false;
+    }
+    final objectId = window.objectId;
+    switch (action) {
+      case DenialWindowAction.minimize:
+        _minimize(objectId);
+      case DenialWindowAction.maximize:
+        _maximize(objectId, bounds: maximizeBounds);
+      case DenialWindowAction.fullscreen:
+        _fullscreen(objectId, bounds: fullscreenBounds);
+      case DenialWindowAction.restore:
+        _restore(objectId);
+      case DenialWindowAction.toggleMaximize:
+        _toggleMaximized(objectId, bounds: maximizeBounds);
+      case DenialWindowAction.toggleFullscreen:
+        final placement = state.placements[objectId];
+        if (placement?.fullscreen ?? false) {
+          _restore(objectId);
+        } else {
+          _fullscreen(objectId, bounds: fullscreenBounds);
+        }
+    }
+    return true;
+  }
+
+  void _minimize(int objectId) {
     if (state.overviewActive) {
       return;
     }
@@ -777,7 +942,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     );
   }
 
-  void maximize(int objectId, {Rect? bounds}) {
+  void _maximize(int objectId, {Rect? bounds}) {
     if (state.overviewActive) {
       return;
     }
@@ -785,10 +950,10 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     if (placement == null || placement.maximized || placement.fullscreen) {
       return;
     }
-    toggleMaximized(objectId, bounds: bounds);
+    _toggleMaximized(objectId, bounds: bounds);
   }
 
-  void restore(int objectId) {
+  void _restore(int objectId) {
     if (state.overviewActive) {
       return;
     }
@@ -801,7 +966,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     } else if (placement.fullscreen) {
       _exitFullscreen(objectId, placement);
     } else if (placement.maximized) {
-      toggleMaximized(objectId);
+      _toggleMaximized(objectId);
     }
   }
 
@@ -821,7 +986,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     );
   }
 
-  void toggleMaximized(int objectId, {Rect? bounds}) {
+  void _toggleMaximized(int objectId, {Rect? bounds}) {
     if (state.overviewActive) {
       return;
     }
@@ -842,7 +1007,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         clearRestoreFrame: true,
       );
       next[objectId] = restored;
-      _pendingNativeFrames[objectId] = restored.frame;
+      _pendingFlutterProposedFrames[objectId] = restored.frame;
     } else {
       final canvas = Offset.zero & state.viewSize;
       final requestedBounds = bounds?.intersect(canvas);
@@ -857,7 +1022,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
         restoreFrame: placement.frame,
       );
       next[objectId] = maximized;
-      _pendingNativeFrames[objectId] = maximized.frame;
+      _pendingFlutterProposedFrames[objectId] = maximized.frame;
     }
     state = state.copyWith(
       placements: next,
@@ -865,7 +1030,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
     );
   }
 
-  void toggleFullscreen(int objectId, {required Rect bounds}) {
+  void _fullscreen(int objectId, {required Rect bounds}) {
     if (state.overviewActive) {
       return;
     }
@@ -874,7 +1039,6 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       return;
     }
     if (placement.fullscreen) {
-      _exitFullscreen(objectId, placement);
       return;
     }
 
@@ -893,7 +1057,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       fullscreenRestoreFrame: placement.frame,
     );
     next[objectId] = fullscreen;
-    _pendingNativeFrames[objectId] = fullscreen.frame;
+    _pendingFlutterProposedFrames[objectId] = fullscreen.frame;
     state = state.copyWith(
       placements: next,
       clearOverview: state.overviewActive,
@@ -913,7 +1077,7 @@ class DesktopWorkspaceController extends Notifier<DesktopWorkspaceState> {
       clearFullscreenRestoreFrame: true,
     );
     next[objectId] = restored;
-    _pendingNativeFrames[objectId] = restored.frame;
+    _pendingFlutterProposedFrames[objectId] = restored.frame;
     state = state.copyWith(placements: next);
   }
 

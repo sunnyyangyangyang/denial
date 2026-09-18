@@ -5,11 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../input/input_layout.dart';
 import '../input/shell_interaction_registry.dart';
+import '../models/display_layout.dart';
 import '../models/denial_window.dart';
 import '../state/desktop_window_switcher.dart';
 import '../state/shell_controller.dart';
 import '../state/display_layout.dart';
 import '../settings/settings_controller.dart';
+import '../settings/shell_settings.dart';
 import 'desktop_workspace.dart';
 
 class DesktopInputLayoutPublisher extends ConsumerStatefulWidget {
@@ -44,8 +46,11 @@ class _DesktopInputLayoutPublisherState
     ref.watch(desktopWindowSwitcherProvider);
     ref.watch(
       shellSettingsProvider.select(
-        (settings) =>
-            (settings.layout.workspacesEnabled, settings.layout.workspaceCount),
+        (settings) => (
+          settings.layout.workspacesEnabled,
+          settings.layout.workspaceCount,
+          settings.layout.windowLayout,
+        ),
       ),
     );
     ref.watch(displayLayoutProvider);
@@ -99,6 +104,8 @@ class _DesktopInputLayoutPublisherState
         desktop: ref.read(desktopWorkspaceProvider),
         switcher: ref.read(desktopWindowSwitcherProvider),
         interactions: ref.read(shellInteractionRegistryProvider),
+        displayLayout: displayLayout,
+        windowLayout: settings.windowLayout,
       );
       if (_lastSource?.hasSameInputsAs(source) ?? false) {
         return;
@@ -145,6 +152,25 @@ class _DesktopInputLayoutPublisherState
           ..sort((a, b) => compareDesktopWindowStack(a, b, windowsById));
 
     final canvas = Offset.zero & viewSize;
+    final scrollingOutputRects =
+        source.windowLayout == DesktopWindowLayout.scrolling
+        ? <int, Rect>{
+            for (final output
+                in source.displayLayout?.outputs ?? const <DisplayOutput>[])
+              output.monitorId: output.logicalRect,
+          }
+        : const <int, Rect>{};
+    Rect? outputClipFor(DesktopWindowPlacement placement) {
+      return desktopScrollingOutputClip(
+        windowLayout: source.windowLayout,
+        pinned: windowsById[placement.objectId]?.pinned ?? false,
+        transformed:
+            desktop.isInOverview(placement.objectId) ||
+            (switcher?.objectIds.contains(placement.objectId) ?? false),
+        outputRect: scrollingOutputRects[placement.monitorId],
+      );
+    }
+
     var shellRegions = <Rect>[canvas];
     // Hover panels must not take pointer ownership of the whole scene. Changing
     // ownership while leaving a hot edge can synthesize another edge enter and
@@ -155,13 +181,22 @@ class _DesktopInputLayoutPublisherState
       }
       for (final placement in placements) {
         final visualContentRect = placement.contentRect;
-        shellRegions = _subtractFromAll(shellRegions, visualContentRect);
+        final outputClip = outputClipFor(placement);
+        final visibleContentRect = outputClip == null
+            ? visualContentRect
+            : visualContentRect.intersect(outputClip);
+        if (!visibleContentRect.isEmpty) {
+          shellRegions = _subtractFromAll(shellRegions, visibleContentRect);
+        }
         final window = windowsById[placement.objectId]!;
         for (final popup in window.popupRoots) {
-          shellRegions = _subtractFromAll(
-            shellRegions,
-            window.mapSurfaceRect(popup, visualContentRect),
-          );
+          final popupRect = window.mapSurfaceRect(popup, visualContentRect);
+          final visiblePopupRect = outputClip == null
+              ? popupRect
+              : popupRect.intersect(outputClip);
+          if (!visiblePopupRect.isEmpty) {
+            shellRegions = _subtractFromAll(shellRegions, visiblePopupRect);
+          }
         }
       }
     }
@@ -228,38 +263,67 @@ class _DesktopInputLayoutPublisherState
       visibleSurfaceIds.addAll(window.visibleSurfaceIds);
       final visualContentRect = placement.contentRect;
       final sourceRect = window.contentCoordinateRect;
+      final outputClip = outputClipFor(placement);
       final baseZ = placementOrder[placement.objectId]! * zStride;
       final popupRoots = window.popupRoots.toList(growable: false).reversed;
       for (final popup in popupRoots) {
+        final popupRect = window.mapSurfaceRect(popup, visualContentRect);
+        final popupGeometry = outputClip == null
+            ? (
+                rect: popupRect,
+                sourceRect: Rect.fromLTWH(
+                  0.0,
+                  0.0,
+                  popup.surfaceWidth,
+                  popup.surfaceHeight,
+                ),
+              )
+            : desktopClipInputGeometryToRect(
+                rect: popupRect,
+                sourceRect: Rect.fromLTWH(
+                  0.0,
+                  0.0,
+                  popup.surfaceWidth,
+                  popup.surfaceHeight,
+                ),
+                clipRect: outputClip,
+              );
+        if (popupGeometry == null) {
+          continue;
+        }
         inputWindows.add(
           InputWindowRegion(
             window: window,
             surfaceId: popup.surfaceId,
-            rect: window.mapSurfaceRect(popup, visualContentRect),
-            sourceRect: Rect.fromLTWH(
-              0.0,
-              0.0,
-              popup.surfaceWidth,
-              popup.surfaceHeight,
-            ),
+            rect: popupGeometry.rect,
+            sourceRect: popupGeometry.sourceRect,
             z: baseZ + popup.compositionOrder + 1,
             geometryLocked: placement.fullscreen,
           ),
         );
       }
-      inputWindows.add(
-        InputWindowRegion(
-          window: window,
-          // A logical window region routes through the complete toplevel
-          // surface tree. The primary texture may be a full-window child and
-          // is a rendering choice, not an input target.
-          surfaceId: window.objectId,
-          rect: visualContentRect,
-          sourceRect: sourceRect,
-          z: baseZ,
-          geometryLocked: placement.fullscreen,
-        ),
-      );
+      final contentGeometry = outputClip == null
+          ? (rect: visualContentRect, sourceRect: sourceRect)
+          : desktopClipInputGeometryToRect(
+              rect: visualContentRect,
+              sourceRect: sourceRect,
+              clipRect: outputClip,
+            );
+      if (contentGeometry != null) {
+        inputWindows.add(
+          InputWindowRegion(
+            window: window,
+            // A logical window region routes through the complete toplevel
+            // surface tree. The primary texture may be a full-window child and
+            // is a rendering choice, not an input target.
+            surfaceId: window.objectId,
+            rect: contentGeometry.rect,
+            sourceRect: contentGeometry.sourceRect,
+            z: baseZ,
+            geometryLocked: placement.fullscreen,
+          ),
+        );
+      }
       _configureWindowGeometry(
         window,
         placement.contentRect,
@@ -315,6 +379,8 @@ class _DesktopInputLayoutSource {
     required this.desktop,
     required this.switcher,
     required this.interactions,
+    required this.displayLayout,
+    required this.windowLayout,
   });
 
   final Size viewSize;
@@ -324,6 +390,8 @@ class _DesktopInputLayoutSource {
   final DesktopWorkspaceState desktop;
   final DesktopWindowSwitcherState? switcher;
   final ShellInteractionSnapshot interactions;
+  final DisplayLayout? displayLayout;
+  final DesktopWindowLayout windowLayout;
 
   bool hasSameInputsAs(_DesktopInputLayoutSource other) {
     return viewSize == other.viewSize &&
@@ -332,8 +400,32 @@ class _DesktopInputLayoutSource {
         windowSnapshotSequence == other.windowSnapshotSequence &&
         desktop.inputLayoutRevision == other.desktop.inputLayoutRevision &&
         identical(switcher, other.switcher) &&
-        identical(interactions, other.interactions);
+        identical(interactions, other.interactions) &&
+        identical(displayLayout, other.displayLayout) &&
+        windowLayout == other.windowLayout;
   }
+}
+
+({Rect rect, Rect sourceRect})? desktopClipInputGeometryToRect({
+  required Rect rect,
+  required Rect sourceRect,
+  required Rect clipRect,
+}) {
+  final clipped = rect.intersect(clipRect);
+  if (clipped.isEmpty || rect.isEmpty || sourceRect.isEmpty) {
+    return null;
+  }
+  final scaleX = sourceRect.width / rect.width;
+  final scaleY = sourceRect.height / rect.height;
+  return (
+    rect: clipped,
+    sourceRect: Rect.fromLTRB(
+      sourceRect.left + (clipped.left - rect.left) * scaleX,
+      sourceRect.top + (clipped.top - rect.top) * scaleY,
+      sourceRect.right - (rect.right - clipped.right) * scaleX,
+      sourceRect.bottom - (rect.bottom - clipped.bottom) * scaleY,
+    ),
+  );
 }
 
 /// Tracks complete shell-authored window rectangles crossing the native

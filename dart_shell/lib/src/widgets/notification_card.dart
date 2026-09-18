@@ -67,14 +67,6 @@ class NotificationCard extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (!mobile) ...[
-          _NotificationHeader(
-            notification: notification,
-            appName: appName,
-            onDismiss: onDismiss,
-          ),
-          SizedBox(height: compact ? 8 : 10),
-        ],
         _NotificationBody(
           notification: notification,
           summary: mobile && !fullPreview ? appName : summary,
@@ -213,6 +205,7 @@ class NotificationCard extends StatelessWidget {
       button: hasDefaultAction,
       label: semanticLabel,
       onTap: hasDefaultAction ? onDefaultAction : null,
+      onDismiss: onDismiss,
       child: hasDefaultAction
           ? _NotificationActivator(
               semanticLabel: l10n.notificationOpen(summary),
@@ -221,70 +214,6 @@ class NotificationCard extends StatelessWidget {
               child: content,
             )
           : content,
-    );
-  }
-}
-
-class _NotificationHeader extends StatelessWidget {
-  const _NotificationHeader({
-    required this.notification,
-    required this.appName,
-    required this.onDismiss,
-  });
-
-  final DesktopNotification notification;
-  final String appName;
-  final VoidCallback? onDismiss;
-
-  @override
-  Widget build(BuildContext context) {
-    final indicator = switch (notification.urgency) {
-      DesktopNotificationUrgency.low => context.shellColors.textTertiary,
-      DesktopNotificationUrgency.normal => ShellTheme.of(context).accent,
-      DesktopNotificationUrgency.critical => context.shellColors.performanceBad,
-    };
-    return Row(
-      children: [
-        NotificationArtwork(
-          notification: notification,
-          size: 34,
-          preferContentImage: false,
-        ),
-        const SizedBox(width: 10),
-        DecoratedBox(
-          decoration: BoxDecoration(color: indicator, shape: BoxShape.circle),
-          child: const SizedBox.square(dimension: 6),
-        ),
-        const SizedBox(width: 7),
-        Expanded(
-          child: Text(
-            appName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: ShellText.base.copyWith(
-              color: context.shellColors.textTertiary,
-              fontSize: 11.5,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.1,
-            ),
-          ),
-        ),
-        if (notification.resident)
-          Padding(
-            padding: EdgeInsets.only(right: 7),
-            child: Icon(
-              Icons.push_pin_rounded,
-              size: 14,
-              color: context.shellColors.textTertiary,
-            ),
-          ),
-        if (onDismiss != null)
-          _NotificationIconButton(
-            label: context.l10n.notificationDismiss,
-            icon: Icons.close_rounded,
-            onPressed: onDismiss!,
-          ),
-      ],
     );
   }
 }
@@ -351,10 +280,7 @@ class _NotificationBody extends StatelessWidget {
         ],
       ],
     );
-    final hasImage =
-        fullPreview &&
-        (notification.imageData != null || notification.imagePath.isNotEmpty);
-    if (!hasImage || mobile) {
+    if (mobile) {
       return copy;
     }
     return Row(
@@ -363,6 +289,7 @@ class _NotificationBody extends StatelessWidget {
         NotificationArtwork(
           notification: notification,
           size: compact ? 58 : 68,
+          preferContentImage: fullPreview,
         ),
         const SizedBox(width: 11),
         Expanded(child: copy),

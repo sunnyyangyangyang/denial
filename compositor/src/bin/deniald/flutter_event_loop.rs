@@ -55,6 +55,14 @@ fn interactive_service_work_pending(events: &RuntimeState) -> bool {
         || !events.pending_window_events.is_empty()
 }
 
+fn output_transaction_waiting(
+    ready_output_apply: bool,
+    pending_output_apply: bool,
+    resident_geometry_reconfigure_requested: bool,
+) -> bool {
+    ready_output_apply || pending_output_apply || resident_geometry_reconfigure_requested
+}
+
 pub(super) struct FlutterEventLoopContext<'a, 'event_loop> {
     pub(super) renderer: &'a mut GlesRenderer,
     pub(super) drm: &'a mut DrmDevice,
@@ -553,9 +561,18 @@ pub(super) fn run_flutter_event_loop(
             }
             collect_flutter_output_damage(runtime, &mut frame_scheduler);
 
-            let output_apply_waiting =
-                ready_output_apply.is_some() || !events.pending_output_applies.is_empty();
-            if !output_apply_waiting && frame_limit.is_none_or(|limit| raster_frames < limit) {
+            // A resident geometry rollback can only replace Flutter's output
+            // geometry after every old-geometry target has drained. Keep the
+            // producer stopped while that rollback is pending; otherwise a
+            // continuously animated cursor can refill the target each time
+            // through the loop and starve both rollback and input forever.
+            let output_transaction_waiting = output_transaction_waiting(
+                ready_output_apply.is_some(),
+                !events.pending_output_applies.is_empty(),
+                events.resident_geometry_reconfigure_requested,
+            );
+            if !output_transaction_waiting && frame_limit.is_none_or(|limit| raster_frames < limit)
+            {
                 let frame_action = runtime.with_frame_readiness(|pending, target_available| {
                     frame_scheduler.step_with_output_readiness(frame_now, pending, |output| {
                         (scheduler.render_available(output), target_available(output))
@@ -652,6 +669,9 @@ pub(super) fn run_flutter_event_loop(
         dpms::synchronize_wake_gestures(scanouts, &mut events);
         synchronize_power_button(scanouts, &mut events);
         synchronize_fingerprint_display_wake(scanouts, &scheduler, &mut events);
+        // Sleep preparation is the final power-policy authority in this turn:
+        // it must override input or client wake requests before the DPMS gate.
+        synchronize_sleep_transition(scanouts, &mut events);
         // The synchronous VT-resume commit invalidated the old scheduler's
         // per-output buffer ownership. Preserve requests until the topology
         // path below recreates that scheduler.
@@ -669,6 +689,7 @@ pub(super) fn run_flutter_event_loop(
                 frame_scheduler.reconfigure(scanouts, Instant::now());
             }
         }
+        release_sleep_delay_if_ready(scanouts, &mut events);
         if events.output_control_dirty {
             // Publish DPMS changes at the single loop-boundary gate above
             // before processing more compositor or Flutter work.
@@ -1610,6 +1631,7 @@ pub(super) fn run_flutter_event_loop(
         }
         if let Some(frontend) = events.wayland.as_mut() {
             frontend.process_pending_dmabufs(renderer)?;
+            frontend.process_toplevel_screencopies(renderer)?;
         }
 
         if let Some(target_output) = events.pending_screenshot_selection.take() {
@@ -1815,4 +1837,19 @@ pub(super) fn run_flutter_event_loop(
         "independently clocked Flutter KMS session complete"
     );
     Ok(swapchain.representative_framebuffer())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::output_transaction_waiting;
+
+    #[test]
+    fn resident_geometry_rollback_stops_frame_production_while_targets_drain() {
+        assert!(output_transaction_waiting(false, false, true));
+    }
+
+    #[test]
+    fn idle_output_transaction_does_not_stop_frame_production() {
+        assert!(!output_transaction_waiting(false, false, false));
+    }
 }

@@ -12,8 +12,11 @@ pub(super) enum BufferState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RenderTargetBlocked {
+    UnknownView,
+    SizeMismatch { expected: PixelSize },
+    MissingAuthorization,
     ReadyHandoff,
-    PoolExhausted,
+    NoFreeSlot,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -227,12 +230,17 @@ impl OutputBufferBroker {
         let Some(pool) = self
             .pools
             .iter_mut()
-            .find(|pool| pool.render_view_id.get() == render_view_id && pool.size == size)
+            .find(|pool| pool.render_view_id.get() == render_view_id)
         else {
-            return Err(RenderTargetBlocked::PoolExhausted);
+            return Err(RenderTargetBlocked::UnknownView);
         };
+        if pool.size != size {
+            return Err(RenderTargetBlocked::SizeMismatch {
+                expected: pool.size,
+            });
+        }
         let Some(authorization) = pool.authorized_request else {
-            return Err(RenderTargetBlocked::PoolExhausted);
+            return Err(RenderTargetBlocked::MissingAuthorization);
         };
         if pool
             .slots
@@ -246,7 +254,7 @@ impl OutputBufferBroker {
             .iter()
             .position(|slot| slot.state == BufferState::Free && slot.output_refs == 0)
         else {
-            return Err(RenderTargetBlocked::PoolExhausted);
+            return Err(RenderTargetBlocked::NoFreeSlot);
         };
         pool.authorized_request = None;
         let slot = &mut pool.slots[slot_index];

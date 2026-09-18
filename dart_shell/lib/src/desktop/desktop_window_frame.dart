@@ -21,6 +21,16 @@ double desktopWindowPresentationOpacity({
   return desktopWidget ? 0.86 * windowOpacity : windowOpacity;
 }
 
+/// Existing windows mounted for desktop navigation are never application
+/// entrances. Their overview, switcher, minimize, or workspace motion owns
+/// the transition instead.
+bool desktopWindowSuppressesInitialReveal({
+  required bool overview,
+  required bool switching,
+  required bool minimized,
+  required bool hasWorkspaceTransition,
+}) => overview || switching || minimized || hasWorkspaceTransition;
+
 class _ClosingDesktopWindow {
   const _ClosingDesktopWindow({
     required this.id,
@@ -28,6 +38,7 @@ class _ClosingDesktopWindow {
     required this.frame,
     required this.fullscreen,
     required this.effect,
+    required this.outputClip,
   });
 
   final int id;
@@ -35,6 +46,7 @@ class _ClosingDesktopWindow {
   final Rect frame;
   final bool fullscreen;
   final DesktopWindowCloseEffect effect;
+  final Rect? outputClip;
 }
 
 class _DesktopClosingWindowFrame extends StatelessWidget {
@@ -53,7 +65,7 @@ class _DesktopClosingWindowFrame extends StatelessWidget {
     final radius = drawsServerFrame ? ShellTheme.of(context).windowRadius : 0.0;
     final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
     final frameColor = context.shellColors.windowFrameSurface;
-    return DesktopWindowCloseAnimation(
+    Widget result = DesktopWindowCloseAnimation(
       effect: closing.effect,
       seed: Object.hash(closing.window.objectId, closing.id),
       onCompleted: onCompleted,
@@ -103,6 +115,16 @@ class _DesktopClosingWindowFrame extends StatelessWidget {
         ],
       ),
     );
+    if (closing.outputClip case final outputClip?) {
+      result = ClipPath(
+        clipper: _WorkspaceOutputClipper(
+          outputClip.shift(-closing.frame.topLeft),
+        ),
+        clipBehavior: Clip.hardEdge,
+        child: result,
+      );
+    }
+    return result;
   }
 }
 
@@ -124,6 +146,8 @@ class _DesktopWindowFrame extends ConsumerWidget {
     required this.switching,
     required this.motionDuration,
     required this.active,
+    required this.selected,
+    required this.windowRevealRegistry,
     required this.onOverviewTap,
     required this.onOverviewClose,
     required this.onOverviewDragStart,
@@ -147,6 +171,8 @@ class _DesktopWindowFrame extends ConsumerWidget {
   final bool switching;
   final Duration motionDuration;
   final bool active;
+  final bool selected;
+  final DesktopWindowRevealMountRegistry windowRevealRegistry;
   final VoidCallback onOverviewTap;
   final VoidCallback onOverviewClose;
   final VoidCallback onOverviewDragStart;
@@ -186,6 +212,9 @@ class _DesktopWindowFrame extends ConsumerWidget {
         (settings) => settings.layout.workspaceSwitchingOrientation,
       ),
     );
+    final windowLayout = ref.watch(
+      shellSettingsProvider.select((settings) => settings.layout.windowLayout),
+    );
     final followsLivePlacement =
         this.placement.dragging &&
         liveGeometry?.dragging == true &&
@@ -210,6 +239,12 @@ class _DesktopWindowFrame extends ConsumerWidget {
     final outputRect = outputPixelGrid?.logicalRect;
     final transformed =
         overview || switching || desktopWidget || offscreenMinimized;
+    final scrollingOutputClip = desktopScrollingOutputClip(
+      windowLayout: windowLayout,
+      pinned: window.pinned,
+      transformed: transformed,
+      outputRect: outputRect,
+    );
     final frame = desktopPixelAlignedWindowFrame(
       frame: liveFrame,
       contentInset: placement.frameBorder,
@@ -269,6 +304,7 @@ class _DesktopWindowFrame extends ConsumerWidget {
       pixelGridScale: devicePixelRatio,
       pixelGridOrigin: pixelGridOrigin,
       alignSizeToDevicePixels: true,
+      globalClipRect: scrollingOutputClip,
       child: DesktopWorkspaceWindowTransition(
         placement: placement,
         transition: workspaceTransition,
@@ -281,11 +317,18 @@ class _DesktopWindowFrame extends ConsumerWidget {
           entering: desktopWidgetEntering,
           exiting: desktopWidgetExiting,
           duration: desktopWidgetTransitionDuration,
-          child: DesktopWindowReveal(
+          child: TrackedDesktopWindowReveal(
             key: ValueKey<String>('desktop-window-content-${window.objectId}'),
+            registry: windowRevealRegistry,
+            objectId: window.objectId,
             enabled: window.shouldAnimateEntrance,
-            suppressInitialAnimation:
-                workspaceTransition != null && !placement.minimized,
+            suppressInitialAnimation: desktopWindowSuppressesInitialReveal(
+              overview: overview,
+              switching: switching,
+              minimized: placement.minimized,
+              hasWorkspaceTransition:
+                  workspaceTransition != null && !placement.minimized,
+            ),
             child: IgnorePointer(
               ignoring:
                   minimized ||
@@ -318,6 +361,7 @@ class _DesktopWindowFrame extends ConsumerWidget {
                         overview: overview,
                         desktopWidget: desktopWidget,
                         dragging: placement.dragging,
+                        selected: selected,
                         label: desktopWidget
                             ? context.l10n.desktopRestoreWindow(
                                 localizedWindowTitle(context, window),
@@ -401,6 +445,7 @@ class _DesktopWindowFrame extends ConsumerWidget {
 
 class DesktopWorkspaceWindowTransition extends StatelessWidget {
   const DesktopWorkspaceWindowTransition({
+    super.key,
     required this.placement,
     required this.transition,
     required this.orientation,
@@ -436,10 +481,10 @@ class DesktopWorkspaceWindowTransition extends StatelessWidget {
         (placement.workspaceId == transition.fromWorkspace ||
             placement.workspaceId == transition.toWorkspace);
     final entering =
-        participates && placement.workspaceId == transition!.toWorkspace;
+        participates && placement.workspaceId == transition.toWorkspace;
     final outgoing =
-        participates && placement.workspaceId == transition!.fromWorkspace;
-    final direction = participates ? transition!.direction.toDouble() : 0.0;
+        participates && placement.workspaceId == transition.fromWorkspace;
+    final direction = participates ? transition.direction.toDouble() : 0.0;
     return ClipPath(
       clipper: participates && resolvedOutput != null
           ? _WorkspaceOutputClipper(
@@ -500,6 +545,7 @@ class _DesktopAnimatedWindowPosition extends ConsumerStatefulWidget {
     this.pixelGridScale,
     this.pixelGridOrigin = Offset.zero,
     this.alignSizeToDevicePixels = false,
+    this.globalClipRect,
     required this.child,
   });
 
@@ -517,6 +563,7 @@ class _DesktopAnimatedWindowPosition extends ConsumerStatefulWidget {
   final double? pixelGridScale;
   final Offset pixelGridOrigin;
   final bool alignSizeToDevicePixels;
+  final Rect? globalClipRect;
   final Widget child;
 
   @override
@@ -629,6 +676,7 @@ class _DesktopAnimatedWindowPositionState
         _layoutPreviewExitActive = false;
         _dragReleaseAnimationOrigin = null;
       },
+      globalClipRect: widget.globalClipRect,
       child: RetainedTranslation(
         translation: liveTranslation,
         enabled: widget.dragging,

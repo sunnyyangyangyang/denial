@@ -979,7 +979,7 @@ impl Dispatch<ZwpTextInputV3, TextInputUserData> for RuntimeState {
         let Some(frontend) = state.wayland.as_mut() else {
             return;
         };
-        let synchronize_input_method = matches!(&request, zwp_text_input_v3::Request::Commit);
+        let mut commit_effect = None;
         let sessions = &mut frontend.text_input.sessions;
         let id = resource.id();
         if !matches!(
@@ -1028,6 +1028,7 @@ impl Dispatch<ZwpTextInputV3, TextInputUserData> for RuntimeState {
                 if matches!(effect, CommitEffect::Activated | CommitEffect::Updated) {
                     frontend.text_input.broker.legacy_touch_keyboard = false;
                 }
+                commit_effect = Some(effect);
             }
             zwp_text_input_v3::Request::SetAvailableActions { available_actions } => {
                 match parse_available_actions(&available_actions) {
@@ -1047,7 +1048,11 @@ impl Dispatch<ZwpTextInputV3, TextInputUserData> for RuntimeState {
             zwp_text_input_v3::Request::Destroy => {}
             _ => unreachable!(),
         }
-        if synchronize_input_method && frontend.synchronize_input_method() {
+        let input_method_changed = commit_effect.is_some_and(|effect| match effect {
+            CommitEffect::Activated => frontend.synchronize_input_method_activation(&id),
+            _ => frontend.synchronize_input_method(),
+        });
+        if input_method_changed {
             state.scene_sync.mark_dirty();
         }
     }
@@ -1106,9 +1111,32 @@ fn parse_available_actions(bytes: &[u8]) -> Option<Vec<u32>> {
 }
 
 impl WaylandFrontend {
+    #[cfg(feature = "flutter")]
+    pub(in super::super) fn shell_captures_keyboard(&self) -> bool {
+        self.text_input.shell_captures_keyboard()
+    }
+
     pub(super) fn synchronize_input_method(&mut self) -> bool {
         let snapshot = self.text_input.input_method_snapshot();
         self.input_method.synchronize(snapshot)
+    }
+
+    fn synchronize_input_method_activation(&mut self, resource: &ObjectId) -> bool {
+        let snapshot = self.text_input.input_method_snapshot();
+        let selected = snapshot.as_ref().is_some_and(|snapshot| {
+            matches!(
+                &snapshot.endpoint,
+                EditorEndpoint::Wayland {
+                    resource: selected,
+                    ..
+                } if selected == resource
+            )
+        });
+        if selected {
+            self.input_method.synchronize_activation(snapshot)
+        } else {
+            self.input_method.synchronize(snapshot)
+        }
     }
 
     pub(crate) fn set_input_method_blocked(&mut self, blocked: bool) -> bool {
@@ -1336,6 +1364,28 @@ mod tests {
         }));
         enable(&mut sessions);
         assert!(sessions.instances[0].touch_dismissed);
+    }
+
+    #[test]
+    fn shell_focus_transfer_requires_a_fresh_client_activation() {
+        let mut sessions = focused();
+        enable(&mut sessions);
+        assert_eq!(sessions.active, Some(1));
+
+        let transition = sessions.set_focus(None);
+        assert_eq!(transition.left, vec![1]);
+        assert_eq!(sessions.active, None);
+
+        let transition = sessions.set_focus(Some(Focus {
+            surface: 100,
+            client: 10,
+        }));
+        assert_eq!(transition.entered, vec![1]);
+        assert_eq!(sessions.active, None);
+        assert_eq!(sessions.commit(&1), CommitEffect::Ignored);
+
+        enable(&mut sessions);
+        assert_eq!(sessions.active, Some(1));
     }
 
     #[test]

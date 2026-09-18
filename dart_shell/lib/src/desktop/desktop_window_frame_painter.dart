@@ -189,11 +189,13 @@ typedef DesktopRoundedFrameGeometry = ({
   double shaderRadius,
 });
 
-/// Resolves the physical-pixel coverage geometry used by the window frame.
+/// Resolves the coverage geometry used by the window frame.
 ///
-/// The complete outer transition is one physical pixel wide. Capping each
-/// half at half the frame thickness keeps the inner and outer transitions from
-/// crossing when an unusually small frame is requested.
+/// The frame and its border stay in logical pixels so they retain the same
+/// visual weight on every output. Only the antialiasing fringe is expressed in
+/// physical pixels. Capping each half at half the frame thickness keeps the
+/// inner and outer transitions from crossing when an unusually small frame is
+/// requested.
 DesktopRoundedFrameGeometry desktopRoundedFrameGeometry({
   required Size size,
   required double radius,
@@ -228,14 +230,16 @@ DesktopRoundedFrameGeometry desktopRoundedFrameGeometry({
   );
 }
 
-/// Paints the opaque frame and its stateful border with an analytic one-pixel
-/// coverage fringe.
+/// Paints the opaque frame and its stateful border with an analytic one-
+/// physical-pixel coverage fringe.
 ///
 /// Impeller can therefore render the rounded silhouette smoothly even when
-/// the external GLES framebuffer is single-sampled. Only four radius-sized
-/// gradient patches are shaded; no save-layer or output-sized attachment is
-/// allocated. The center stays clear so client-provided per-pixel alpha keeps
-/// its existing compositing semantics.
+/// the external GLES framebuffer is single-sampled. Four narrow edge strips
+/// and four radius-sized corner patches are shaded; no save-layer or output-
+/// sized attachment is allocated. The fringe extends half a physical pixel
+/// beyond both boundaries so fractional-scale pixels are not dropped before
+/// the shader can assign their coverage. The center stays clear so client-
+/// provided per-pixel alpha keeps its existing compositing semantics.
 class DesktopWindowFramePainter extends CustomPainter {
   const DesktopWindowFramePainter({
     this.windowId = 0,
@@ -263,7 +267,7 @@ class DesktopWindowFramePainter extends CustomPainter {
       Offset.zero & size,
       radius: radius,
       frameThickness: DesktopMetrics.frameBorder,
-      borderThickness: 1.0 / _resolvedDevicePixelRatio,
+      borderThickness: DesktopMetrics.frameBorder,
       devicePixelRatio: _resolvedDevicePixelRatio,
       frameColor: frameColor,
       borderColor: borderColor,
@@ -314,9 +318,7 @@ void _paintRoundedFrame(
       canvas,
       frame,
       frameThickness: geometry.frameThickness,
-      borderThickness: geometry.borderThickness,
-      frameColor: frameColor,
-      borderColor: compositeBorderColor,
+      color: compositeBorderColor,
     );
     return;
   }
@@ -326,16 +328,14 @@ void _paintRoundedFrame(
     frame,
     radius: geometry.outerRadius,
     frameThickness: geometry.frameThickness,
-    borderThickness: geometry.borderThickness,
-    frameColor: frameColor,
-    borderColor: compositeBorderColor,
+    edgeHalfWidth: geometry.edgeHalfWidth,
+    color: compositeBorderColor,
   );
   _paintFrameCorners(
     canvas,
     frame,
     geometry: geometry,
-    frameColor: frameColor,
-    borderColor: compositeBorderColor,
+    color: compositeBorderColor,
   );
 }
 
@@ -343,18 +343,13 @@ void _paintSquareFrame(
   Canvas canvas,
   Rect frame, {
   required double frameThickness,
-  required double borderThickness,
-  required Color frameColor,
-  required Color borderColor,
+  required Color color,
 }) {
   canvas.drawDRRect(
     RRect.fromRectAndRadius(frame, Radius.zero),
     RRect.fromRectAndRadius(frame.deflate(frameThickness), Radius.zero),
-    Paint()
-      ..color = frameColor
-      ..isAntiAlias = false,
+    Paint()..color = color,
   );
-  _paintRects(canvas, _edgeRects(frame, borderThickness), borderColor);
 }
 
 void _paintFrameStrips(
@@ -362,123 +357,109 @@ void _paintFrameStrips(
   Rect frame, {
   required double radius,
   required double frameThickness,
-  required double borderThickness,
-  required Color frameColor,
-  required Color borderColor,
+  required double edgeHalfWidth,
+  required Color color,
 }) {
-  _paintRects(canvas, <Rect>[
+  final horizontalExtent = Rect.fromLTRB(
+    frame.left + radius,
+    frame.top,
+    frame.right - radius,
+    frame.bottom,
+  );
+  final verticalExtent = Rect.fromLTRB(
+    frame.left,
+    frame.top + radius,
+    frame.right,
+    frame.bottom - radius,
+  );
+  _paintFrameStrip(
+    canvas,
     Rect.fromLTRB(
-      frame.left + radius,
-      frame.top,
-      frame.right - radius,
-      frame.top + frameThickness,
+      horizontalExtent.left,
+      frame.top - edgeHalfWidth,
+      horizontalExtent.right,
+      frame.top + frameThickness + edgeHalfWidth,
     ),
+    shaderStart: Offset(0, frame.top - edgeHalfWidth),
+    shaderEnd: Offset(0, frame.top + frameThickness + edgeHalfWidth),
+    frameThickness: frameThickness,
+    edgeHalfWidth: edgeHalfWidth,
+    color: color,
+  );
+  _paintFrameStrip(
+    canvas,
     Rect.fromLTRB(
-      frame.left + radius,
-      frame.bottom - frameThickness,
-      frame.right - radius,
-      frame.bottom,
+      horizontalExtent.left,
+      frame.bottom - frameThickness - edgeHalfWidth,
+      horizontalExtent.right,
+      frame.bottom + edgeHalfWidth,
     ),
+    shaderStart: Offset(0, frame.bottom - frameThickness - edgeHalfWidth),
+    shaderEnd: Offset(0, frame.bottom + edgeHalfWidth),
+    frameThickness: frameThickness,
+    edgeHalfWidth: edgeHalfWidth,
+    color: color,
+  );
+  _paintFrameStrip(
+    canvas,
     Rect.fromLTRB(
-      frame.left,
-      frame.top + radius,
-      frame.left + frameThickness,
-      frame.bottom - radius,
+      frame.left - edgeHalfWidth,
+      verticalExtent.top,
+      frame.left + frameThickness + edgeHalfWidth,
+      verticalExtent.bottom,
     ),
+    shaderStart: Offset(frame.left - edgeHalfWidth, 0),
+    shaderEnd: Offset(frame.left + frameThickness + edgeHalfWidth, 0),
+    frameThickness: frameThickness,
+    edgeHalfWidth: edgeHalfWidth,
+    color: color,
+  );
+  _paintFrameStrip(
+    canvas,
     Rect.fromLTRB(
-      frame.right - frameThickness,
-      frame.top + radius,
-      frame.right,
-      frame.bottom - radius,
+      frame.right - frameThickness - edgeHalfWidth,
+      verticalExtent.top,
+      frame.right + edgeHalfWidth,
+      verticalExtent.bottom,
     ),
-  ], frameColor);
-  _paintRects(canvas, <Rect>[
-    ..._edgeRects(
-      Rect.fromLTRB(
-        frame.left + radius,
-        frame.top,
-        frame.right - radius,
-        frame.bottom,
-      ),
-      borderThickness,
-      vertical: false,
-    ),
-    ..._edgeRects(
-      Rect.fromLTRB(
-        frame.left,
-        frame.top + radius,
-        frame.right,
-        frame.bottom - radius,
-      ),
-      borderThickness,
-      horizontal: false,
-    ),
-  ], borderColor);
+    shaderStart: Offset(frame.right - frameThickness - edgeHalfWidth, 0),
+    shaderEnd: Offset(frame.right + edgeHalfWidth, 0),
+    frameThickness: frameThickness,
+    edgeHalfWidth: edgeHalfWidth,
+    color: color,
+  );
 }
 
-List<Rect> _edgeRects(
-  Rect frame,
-  double thickness, {
-  bool horizontal = true,
-  bool vertical = true,
+void _paintFrameStrip(
+  Canvas canvas,
+  Rect rect, {
+  required Offset shaderStart,
+  required Offset shaderEnd,
+  required double frameThickness,
+  required double edgeHalfWidth,
+  required Color color,
 }) {
-  if (thickness <= 0.0 || frame.isEmpty) {
-    return const <Rect>[];
+  if (rect.isEmpty) {
+    return;
   }
-  final rects = <Rect>[];
-  if (horizontal) {
-    rects
-      ..add(
-        Rect.fromLTRB(
-          frame.left,
-          frame.top,
-          frame.right,
-          frame.top + thickness,
-        ),
-      )
-      ..add(
-        Rect.fromLTRB(
-          frame.left,
-          frame.bottom - thickness,
-          frame.right,
-          frame.bottom,
-        ),
-      );
-  }
-  if (vertical) {
-    rects
-      ..add(
-        Rect.fromLTRB(
-          frame.left,
-          frame.top,
-          frame.left + thickness,
-          frame.bottom,
-        ),
-      )
-      ..add(
-        Rect.fromLTRB(
-          frame.right - thickness,
-          frame.top,
-          frame.right,
-          frame.bottom,
-        ),
-      );
-  }
-  return rects;
-}
-
-void _paintRects(Canvas canvas, Iterable<Rect> rects, Color color) {
-  final path = Path();
-  for (final rect in rects) {
-    if (!rect.isEmpty) {
-      path.addRect(rect);
-    }
-  }
-  canvas.drawPath(
-    path,
+  final extent = frameThickness + 2.0 * edgeHalfWidth;
+  final innerRampStart = 2.0 * edgeHalfWidth / extent;
+  final innerRampEnd = frameThickness / extent;
+  canvas.drawRect(
+    rect,
     Paint()
-      ..color = color
-      ..isAntiAlias = false,
+      ..isAntiAlias = false
+      ..shader = ui.Gradient.linear(
+        shaderStart,
+        shaderEnd,
+        <Color>[
+          color.withValues(alpha: 0.0),
+          color,
+          color,
+          color.withValues(alpha: 0.0),
+        ],
+        <double>[0.0, innerRampStart, innerRampEnd, 1.0],
+      ),
   );
 }
 
@@ -486,8 +467,7 @@ void _paintFrameCorners(
   Canvas canvas,
   Rect frame, {
   required DesktopRoundedFrameGeometry geometry,
-  required Color frameColor,
-  required Color borderColor,
+  required Color color,
 }) {
   final centers = <Offset>[
     Offset(frame.left + geometry.outerRadius, frame.top + geometry.outerRadius),
@@ -504,17 +484,34 @@ void _paintFrameCorners(
       frame.bottom - geometry.outerRadius,
     ),
   ];
+  final fringe = geometry.edgeHalfWidth;
   final cornerRects = <Rect>[
-    Rect.fromLTRB(frame.left, frame.top, centers[0].dx, centers[0].dy),
-    Rect.fromLTRB(centers[1].dx, frame.top, frame.right, centers[1].dy),
-    Rect.fromLTRB(centers[2].dx, centers[2].dy, frame.right, frame.bottom),
-    Rect.fromLTRB(frame.left, centers[3].dy, centers[3].dx, frame.bottom),
+    Rect.fromLTRB(
+      frame.left - fringe,
+      frame.top - fringe,
+      centers[0].dx,
+      centers[0].dy,
+    ),
+    Rect.fromLTRB(
+      centers[1].dx,
+      frame.top - fringe,
+      frame.right + fringe,
+      centers[1].dy,
+    ),
+    Rect.fromLTRB(
+      centers[2].dx,
+      centers[2].dy,
+      frame.right + fringe,
+      frame.bottom + fringe,
+    ),
+    Rect.fromLTRB(
+      frame.left - fringe,
+      centers[3].dy,
+      centers[3].dx,
+      frame.bottom + fringe,
+    ),
   ];
-  final profile = _frameCornerProfile(
-    geometry,
-    frameColor: frameColor,
-    borderColor: borderColor,
-  );
+  final profile = _frameCornerProfile(geometry, color: color);
   final paint = Paint()..isAntiAlias = false;
   for (var index = 0; index < centers.length; index++) {
     paint.shader = ui.Gradient.radial(
@@ -529,42 +526,32 @@ void _paintFrameCorners(
 
 ({List<Color> colors, List<double> stops}) _frameCornerProfile(
   DesktopRoundedFrameGeometry geometry, {
-  required Color frameColor,
-  required Color borderColor,
+  required Color color,
 }) {
-  final transparentFrame = frameColor.withValues(alpha: 0.0);
-  final transparentBorder = borderColor.withValues(alpha: 0.0);
+  final transparent = color.withValues(alpha: 0.0);
   final shaderRadius = geometry.shaderRadius;
   final innerStart = math.max(
     0.0,
     geometry.innerRadius - geometry.edgeHalfWidth,
   );
   final innerEnd = geometry.innerRadius + geometry.edgeHalfWidth;
-  final outerStart = geometry.outerRadius - geometry.edgeHalfWidth;
-  final borderCenter = geometry.outerRadius - geometry.borderThickness;
-  final borderStart = math.max(innerEnd, borderCenter - geometry.edgeHalfWidth);
-  final borderEnd = math.max(
-    borderStart,
-    math.min(outerStart, borderCenter + geometry.edgeHalfWidth),
+  final outerStart = math.max(
+    innerEnd,
+    geometry.outerRadius - geometry.edgeHalfWidth,
   );
-  final resolvedOuterStart = math.max(borderEnd, outerStart);
   final fillsCenter = geometry.innerRadius <= 0.0;
 
   return (
     colors: <Color>[
-      fillsCenter ? frameColor : transparentFrame,
-      frameColor,
-      frameColor,
-      borderColor,
-      borderColor,
-      transparentBorder,
+      fillsCenter ? color : transparent,
+      color,
+      color,
+      transparent,
     ],
     stops: <double>[
       innerStart / shaderRadius,
       innerEnd / shaderRadius,
-      borderStart / shaderRadius,
-      borderEnd / shaderRadius,
-      resolvedOuterStart / shaderRadius,
+      outerStart / shaderRadius,
       1.0,
     ],
   );

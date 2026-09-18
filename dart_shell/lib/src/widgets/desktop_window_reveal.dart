@@ -23,6 +23,78 @@ enum DesktopWindowRevealOrigin {
   Offset resolve(Size size) => alignment.alongSize(size);
 }
 
+/// Remembers which native windows have already owned a desktop scene entry.
+///
+/// A window can temporarily leave the Flutter tree while overview, switching,
+/// or minimized layers hand it back to the normal workspace. Its next mount is
+/// still the same native window and must not replay the application entrance.
+class DesktopWindowRevealMountRegistry {
+  final Set<int> _mountedObjectIds = <int>{};
+
+  /// Registers a scene mount and reports whether [objectId] mounted before.
+  bool registerMount(int objectId) => !_mountedObjectIds.add(objectId);
+
+  /// Forgets windows which no longer exist, allowing a reused ID to animate.
+  void retainOnly(Set<int> activeObjectIds) {
+    _mountedObjectIds.retainAll(activeObjectIds);
+  }
+}
+
+/// Applies [DesktopWindowReveal] once across temporary scene remounts.
+class TrackedDesktopWindowReveal extends StatefulWidget {
+  const TrackedDesktopWindowReveal({
+    super.key,
+    required this.registry,
+    required this.objectId,
+    required this.child,
+    this.enabled = true,
+    this.suppressInitialAnimation = false,
+    this.origin,
+  });
+
+  final DesktopWindowRevealMountRegistry registry;
+  final int objectId;
+  final Widget child;
+  final bool enabled;
+  final bool suppressInitialAnimation;
+  final DesktopWindowRevealOrigin? origin;
+
+  @override
+  State<TrackedDesktopWindowReveal> createState() =>
+      _TrackedDesktopWindowRevealState();
+}
+
+class _TrackedDesktopWindowRevealState
+    extends State<TrackedDesktopWindowReveal> {
+  late bool _previouslyMounted;
+
+  @override
+  void initState() {
+    super.initState();
+    _previouslyMounted = widget.registry.registerMount(widget.objectId);
+  }
+
+  @override
+  void didUpdateWidget(covariant TrackedDesktopWindowReveal oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.registry != widget.registry ||
+        oldWidget.objectId != widget.objectId) {
+      _previouslyMounted = widget.registry.registerMount(widget.objectId);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DesktopWindowReveal(
+      enabled: widget.enabled,
+      suppressInitialAnimation:
+          _previouslyMounted || widget.suppressInitialAnimation,
+      origin: widget.origin,
+      child: widget.child,
+    );
+  }
+}
+
 /// Reveals a newly inserted desktop window with Denial's expanding squircle.
 ///
 /// The state belongs to the window's keyed scene entry, so focus changes,

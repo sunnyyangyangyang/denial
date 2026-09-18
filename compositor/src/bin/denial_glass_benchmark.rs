@@ -59,6 +59,14 @@ type FenceStepSample = (u64, [(u64, u64); 9]);
 
 static PRIORITY_FAILURES: AtomicI32 = AtomicI32::new(0);
 
+fn scheduler_parameters(priority: libc::c_int) -> libc::sched_param {
+    // SAFETY: sched_param is plain old data. Zero initializes musl's extended
+    // fields while preserving the single-field semantics used by glibc.
+    let mut parameters: libc::sched_param = unsafe { std::mem::zeroed() };
+    parameters.sched_priority = priority;
+    parameters
+}
+
 unsafe extern "C" fn set_worker_thread_priority(priority: sys::FlutterThreadPriority) {
     let (policy, sched_priority) = match priority {
         sys::FlutterThreadPriority_kDisplay | sys::FlutterThreadPriority_kRaster => {
@@ -69,7 +77,7 @@ unsafe extern "C" fn set_worker_thread_priority(priority: sys::FlutterThreadPrio
         }
         _ => return,
     };
-    let param = libc::sched_param { sched_priority };
+    let param = scheduler_parameters(sched_priority);
     // SAFETY: pid zero changes only the calling worker thread. The callback
     // uses fixed Linux scheduler values and never touches the parent process.
     if unsafe { libc::syscall(libc::SYS_sched_setscheduler, 0, policy, &param) } != 0 {
@@ -889,7 +897,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     check_parent()?;
     if desktop_priorities {
-        let mut param = libc::sched_param { sched_priority: 0 };
+        let mut param = scheduler_parameters(0);
         // SAFETY: these calls only query the identified compositor process.
         let matches = unsafe {
             libc::sched_getscheduler(parent_pid as libc::pid_t) & !libc::SCHED_RESET_ON_FORK

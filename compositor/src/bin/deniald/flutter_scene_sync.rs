@@ -151,10 +151,22 @@ pub(super) fn synchronize_flutter_input_layout(
     let Some(layout) = runtime.take_input_layout_update() else {
         return Ok(());
     };
-    let Some(frontend) = events.wayland.as_mut() else {
+    if events.wayland.is_none() {
         runtime.recycle_input_layout(layout);
         return Ok(());
-    };
+    }
+    let next_shell_capture = layout.keyboard_capture() || layout.exclusive_shell();
+    let previous_shell_capture = events
+        .wayland
+        .as_ref()
+        .is_some_and(wayland_frontend::WaylandFrontend::shell_captures_keyboard);
+    if next_shell_capture && !previous_shell_capture {
+        wayland_frontend::suspend_keyboard_focus_for_shell(events);
+    }
+    let frontend = events
+        .wayland
+        .as_mut()
+        .expect("checked Wayland frontend disappeared");
     let (previous, sampling_changed, routing_changed) = frontend.install_input_layout(layout);
     if let Some(previous) = previous {
         runtime.recycle_input_layout(previous);
@@ -168,6 +180,9 @@ pub(super) fn synchronize_flutter_input_layout(
     }
     if routing_changed {
         wayland_frontend::reconcile_flutter_pointer_route(events);
+    }
+    if previous_shell_capture && !next_shell_capture {
+        wayland_frontend::restore_shell_keyboard_focus(events);
     }
     // InputLayout owns shell keyboard capture. Publish again after applying
     // it so releasing a local Flutter surface exposes an already-active
@@ -203,6 +218,25 @@ pub(super) fn synchronize_wayland_cursor(
             .as_mut()
             .expect("cursor publication has no Wayland frontend")
             .flutter_cursor_state(publication);
+        // FlutterRuntime assigns the monotonic cursor epoch only after it has
+        // installed the associated texture set. Validate the compositor-owned
+        // payload here without rejecting that intentionally unassigned epoch;
+        // the wire encoder validates the complete state again after assignment.
+        if let Err(error) = wire::validate_cursor_state_payload(&state) {
+            warn!(
+                %error,
+                kind = ?state.kind,
+                surfaces = state.surfaces.len(),
+                textures = textures.len(),
+                "dropping invalid cursor wire payload"
+            );
+            events
+                .wayland
+                .as_mut()
+                .expect("rejected cursor publication lost its Wayland frontend")
+                .recycle_flutter_cursor_state(state, textures);
+            return Ok(());
+        }
         let (state, textures) = runtime.sync_cursor_state(state, textures, output)?;
         events
             .wayland

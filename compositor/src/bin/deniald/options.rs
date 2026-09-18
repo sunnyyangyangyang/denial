@@ -124,6 +124,7 @@ pub(super) struct Options {
     pub(super) flutter_bundle: Option<PathBuf>,
     #[cfg(feature = "flutter")]
     pub(super) flutter_renderer: RendererBackend,
+    pub(super) software_rendering: bool,
     pub(super) flutter_offscreen_blit: bool,
     pub(super) flutter_debug_bundle: Option<PathBuf>,
     pub(super) flutter_ui_workspace: Option<PathBuf>,
@@ -164,6 +165,7 @@ impl Options {
             flutter_bundle: None,
             #[cfg(feature = "flutter")]
             flutter_renderer: RendererBackend::default(),
+            software_rendering: false,
             flutter_offscreen_blit: false,
             flutter_debug_bundle: None,
             flutter_ui_workspace: None,
@@ -199,6 +201,7 @@ impl Options {
         let mut flutter_bundle = None;
         #[cfg(feature = "flutter")]
         let mut flutter_renderer = None;
+        let mut software_rendering = false;
         let mut flutter_offscreen_blit = false;
         let mut flutter_debug_bundle = None;
         let mut flutter_ui_workspace = None;
@@ -296,6 +299,7 @@ impl Options {
                             .parse()?,
                     );
                 }
+                "--software-rendering" => software_rendering = true,
                 "--flutter-offscreen-blit" => flutter_offscreen_blit = true,
                 "--flutter-debug-bundle" => {
                     flutter_debug_bundle = Some(PathBuf::from(
@@ -336,6 +340,7 @@ impl Options {
                          [--wayland] \
                          [--flutter-bundle PATH] \
                          [--flutter-renderer skia|impeller] \
+                         [--software-rendering] \
                          [--flutter-offscreen-blit] \
                          [--flutter-debug-bundle PATH] \
                          [--flutter-ui-workspace PATH] \
@@ -480,6 +485,7 @@ impl Options {
             flutter_bundle,
             #[cfg(feature = "flutter")]
             flutter_renderer: flutter_renderer.unwrap_or_default(),
+            software_rendering,
             flutter_offscreen_blit,
             flutter_debug_bundle,
             flutter_ui_workspace,
@@ -1334,4 +1340,18 @@ fn format_output_scale(scale_120: u32) -> String {
         value.pop();
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Options;
+
+    #[test]
+    fn software_rendering_is_an_explicit_compositor_option() {
+        let default = Options::parse_from(Vec::<String>::new()).unwrap();
+        let software = Options::parse_from(["--software-rendering".to_owned()]).unwrap();
+
+        assert!(!default.software_rendering);
+        assert!(software.software_rendering);
+    }
 }

@@ -207,10 +207,15 @@ compositor/target/release/deniald \
 
 With `--wayland`, the process advertises physical `wl_output` globals, XDG
 shell, SHM, `wp_viewporter` crop-and-scale support, `linux-dmabuf` v4 feedback
-for the EGL render node, and `zwlr-output-power-management-v1`. It also advertises
-`zwlr-screencopy-unstable-v1` version 3 with SHM and XRGB8888 DMA-BUF capture;
-the latter keeps the frame transfer on the GPU for compatible screen recorders
-and PipeWire portal backends. The Flutter Settings app also configures a
+for the EGL render node, and `zwlr-output-power-management-v1`. It advertises
+`ext-output-image-capture-source-v1`,
+`ext-foreign-toplevel-image-capture-source-v1`, and
+`ext-foreign-toplevel-list-v1` with `ext-image-copy-capture-v1` for modern
+output and isolated native-window capture. It retains
+`zwlr-screencopy-unstable-v1` version 3 for legacy clients and region capture.
+The capture paths support SHM and XRGB8888 DMA-BUF targets; DMA-BUF keeps frame
+transfer on the GPU for compatible screen recorders and PipeWire portal
+backends. The Flutter Settings app also configures a
 compositor-owned inactivity timeout. Mouse, keyboard, touch, tablet and Linux
 joystick activity reset it; visible clients can keep displays awake with
 `zwp_idle_inhibit_manager_v1`, as media players do during playback. DPMS-off

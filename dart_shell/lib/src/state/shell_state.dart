@@ -7,6 +7,7 @@ import '../models/denial_window.dart';
 class ShellState {
   factory ShellState({
     required List<DenialWindow> windows,
+    List<DenialWindow> layerSurfaces = const <DenialWindow>[],
     required int windowSnapshotSequence,
     required bool overviewVisible,
     required Offset gestureDrag,
@@ -29,6 +30,7 @@ class ShellState {
     );
     return ShellState._(
       windows: windows,
+      layerSurfaces: layerSurfaces,
       windowsByObjectId: Map<int, DenialWindow>.unmodifiable(
         <int, DenialWindow>{
           for (final window in windows) window.objectId: window,
@@ -57,6 +59,7 @@ class ShellState {
 
   const ShellState._({
     required this.windows,
+    required this.layerSurfaces,
     required this._windowsByObjectId,
     required this.openAppWindows,
     required this._openAppWindowIndices,
@@ -101,6 +104,7 @@ class ShellState {
   }
 
   final List<DenialWindow> windows;
+  final List<DenialWindow> layerSurfaces;
   final Map<int, DenialWindow> _windowsByObjectId;
   final List<DenialWindow> openAppWindows;
   final Map<int, int> _openAppWindowIndices;
@@ -154,6 +158,7 @@ class ShellState {
 
   ShellState copyWith({
     List<DenialWindow>? windows,
+    List<DenialWindow>? layerSurfaces,
     int? windowSnapshotSequence,
     bool? overviewVisible,
     Offset? gestureDrag,
@@ -183,6 +188,7 @@ class ShellState {
           );
     return ShellState._(
       windows: nextWindows,
+      layerSurfaces: layerSurfaces ?? this.layerSurfaces,
       windowsByObjectId: windowsUnchanged
           ? _windowsByObjectId
           : Map<int, DenialWindow>.unmodifiable(<int, DenialWindow>{

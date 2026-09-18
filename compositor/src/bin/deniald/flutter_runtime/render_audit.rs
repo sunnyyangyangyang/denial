@@ -229,7 +229,10 @@ impl RenderDamageAudit {
             RenderTargetBlocked::ReadyHandoff => {
                 self.target_blocked_ready = self.target_blocked_ready.saturating_add(1);
             }
-            RenderTargetBlocked::PoolExhausted => {
+            RenderTargetBlocked::UnknownView
+            | RenderTargetBlocked::SizeMismatch { .. }
+            | RenderTargetBlocked::MissingAuthorization
+            | RenderTargetBlocked::NoFreeSlot => {
                 self.target_blocked_exhausted = self.target_blocked_exhausted.saturating_add(1);
             }
         }

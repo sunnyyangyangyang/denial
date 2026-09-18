@@ -93,6 +93,9 @@ mod screenshot;
 mod session_activation;
 #[path = "deniald/settings.rs"]
 mod settings;
+#[cfg(feature = "flutter")]
+#[path = "deniald/sleep_transition.rs"]
+mod sleep_transition;
 #[path = "deniald/startup.rs"]
 mod startup;
 #[cfg(feature = "flutter")]
@@ -120,6 +123,9 @@ mod window_placement_store;
 #[cfg(feature = "flutter")]
 #[path = "deniald/wire.rs"]
 mod wire;
+#[cfg(feature = "flutter")]
+#[path = "deniald/xcursor_sentinel.rs"]
+mod xcursor_sentinel;
 #[cfg(feature = "flutter")]
 #[path = "deniald/xembed_tray.rs"]
 mod xembed_tray;
@@ -267,6 +273,8 @@ use session_activation::{
     preserves_predecessor_kms_state, publish_session_activation_environment,
     stop_systemd_graphical_session,
 };
+#[cfg(feature = "flutter")]
+use sleep_transition::{release_sleep_delay_if_ready, synchronize_sleep_transition};
 use startup::run;
 use system_controls::SystemControls;
 #[cfg(feature = "flutter")]
@@ -347,6 +355,21 @@ fn main() {
 fn denial_main() -> Result<(), Box<dyn Error>> {
     install_legacy_denial_environment_aliases();
     let options = Options::parse()?;
+    if options.software_rendering {
+        // SAFETY: option parsing happens on the process's only thread, before
+        // libseat, Mesa, Flutter, or any Denial worker is initialized. Mesa
+        // reads these overrides while constructing the first GBM/EGL display.
+        // The driver override is required on GBM backends such as vmwgfx,
+        // where LIBGL_ALWAYS_SOFTWARE alone can retain the hardware DRI driver.
+        unsafe {
+            std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
+            std::env::set_var("MESA_LOADER_DRIVER_OVERRIDE", "kms_swrast");
+        }
+    }
+    #[cfg(feature = "flutter")]
+    if options.wayland && options.flutter_bundle.is_some() {
+        xcursor_sentinel::install()?;
+    }
     if options.start_locked {
         // SAFETY: option parsing happens on the process's only thread, before
         // libseat, authentication, Flutter, or any other worker is started.
@@ -365,6 +388,10 @@ fn denial_main() -> Result<(), Box<dyn Error>> {
                 .unwrap_or_else(|_| "deniald=info,smithay=info".into()),
         )
         .init();
+
+    if options.software_rendering {
+        info!(driver = "kms_swrast", "using Mesa software rendering");
+    }
 
     if options.max_outputs == 0 {
         return Ok(());

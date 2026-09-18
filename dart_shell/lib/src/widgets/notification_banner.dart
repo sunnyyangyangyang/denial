@@ -86,24 +86,37 @@ class NotificationBannerLayer extends ConsumerWidget {
         if (rect.isEmpty) {
           return const SizedBox.shrink();
         }
+        final localRect = rect.shift(-output.topLeft);
         return Stack(
           fit: StackFit.expand,
           children: [
             Positioned.fromRect(
-              rect: rect,
-              child: Align(
-                alignment: placement.anchor.alignment,
-                child: SizedBox(
-                  width: rect.width,
-                  child: NotificationBannerView(
-                    notifications: notifications,
-                    previewMode: previewMode,
-                    interactive: !locked,
-                    entryOffset: _notificationEntryOffset(placement.anchor),
-                    onDismiss: controller.dismiss,
-                    onDefaultAction: controller.invokeDefaultAction,
-                    onAction: controller.invokeAction,
-                  ),
+              rect: output,
+              child: ClipRect(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Positioned.fromRect(
+                      rect: localRect,
+                      child: Align(
+                        alignment: placement.anchor.alignment,
+                        child: SizedBox(
+                          width: rect.width,
+                          child: NotificationBannerView(
+                            notifications: notifications,
+                            previewMode: previewMode,
+                            interactive: !locked,
+                            entryOffset: _notificationEntryOffset(
+                              placement.anchor,
+                            ),
+                            onDismiss: controller.dismiss,
+                            onDefaultAction: controller.invokeDefaultAction,
+                            onAction: controller.invokeAction,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),

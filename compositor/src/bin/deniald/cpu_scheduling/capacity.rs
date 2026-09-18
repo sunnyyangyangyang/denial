@@ -4,6 +4,9 @@
 //! preserve the host policy. This is a runnable-task hint, not a clock floor.
 use std::{io, sync::OnceLock};
 
+#[cfg(test)]
+use super::scheduler_parameters;
+
 // Linux sched_attr version 1; libc currently exposes only the shorter v0 ABI.
 #[repr(C)]
 #[derive(Default)]
@@ -121,7 +124,7 @@ mod tests {
         // This is an actual kernel API check on an isolated ordinary worker.
         // Its reset-on-fork flag and hint disappear when the worker exits.
         std::thread::spawn(|| {
-            let parameters = libc::sched_param { sched_priority: 0 };
+            let parameters = scheduler_parameters(0);
             assert_eq!(
                 unsafe {
                     libc::syscall(
@@ -146,7 +149,7 @@ mod tests {
                 assert_eq!(attributes().sched_util_min, 0);
                 // An ordinary worker must not acquire a hint without its guard.
                 assert!(request_minimum(512).is_err());
-                let parameters = libc::sched_param { sched_priority: 0 };
+                let parameters = scheduler_parameters(0);
                 assert_eq!(
                     unsafe {
                         libc::syscall(

@@ -11,6 +11,7 @@ import '../localization/denial_localizations.dart';
 import '../models/display_layout.dart';
 import '../state/display_layout.dart';
 import '../state/cursor_theme.dart';
+import '../state/shell_fonts.dart';
 import '../state/output_configuration.dart';
 import '../state/ui_development.dart';
 import '../theme/motion.dart';
@@ -326,6 +327,7 @@ class _SettingsPageBody extends ConsumerWidget {
         final cursorCatalogLoading = ref
             .watch(cursorThemeCatalogProvider)
             .isLoading;
+        final fontCatalog = ref.watch(availableShellFontFamiliesProvider);
         return SettingsAppearancePage(
           settings: settings,
           extractedAccent: ref.watch(wallpaperAccentProvider).color,
@@ -334,6 +336,9 @@ class _SettingsPageBody extends ConsumerWidget {
           onColorSchemePreferenceChanged: controller.setColorSchemePreference,
           onAccentSourceChanged: controller.setAccentSource,
           onOpenAccentPicker: onOpenAccentPicker,
+          fontFamilies: fontCatalog.value ?? const <String>[],
+          fontCatalogLoading: fontCatalog.isLoading,
+          onFontFamilyChanged: controller.setFontFamily,
           onCornerRadiusScaleChanged: controller.setCornerRadiusScale,
           onPanelOpacityChanged: controller.setPanelOpacity,
           onCardOpacityChanged: controller.setCardOpacity,
@@ -491,6 +496,7 @@ class _SettingsPageBody extends ConsumerWidget {
           onSuspendEnabledChanged: controller.setIdleSuspendEnabled,
           onSuspendTimeoutChanged: controller.setIdleSuspendTimeoutMinutes,
           onSuspendModeChanged: controller.setSuspendMode,
+          onPowerButtonActionChanged: controller.setPowerButtonAction,
           onReset: controller.resetPower,
         );
       case SettingsPageId.lockScreen:

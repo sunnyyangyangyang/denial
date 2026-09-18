@@ -160,6 +160,19 @@ resolve_render_device() {
   printf '%s\n' "$resolved"
 }
 
+drm_kernel_driver() {
+  local device="$1"
+  local driver
+  driver="$(readlink -f -- "/sys/class/drm/${device##*/}/device/driver" 2>/dev/null)" \
+    || return 1
+  [[ -n "$driver" ]] || return 1
+  printf '%s\n' "${driver##*/}"
+}
+
+should_enable_software_rendering() {
+  [[ "$1" == vmwgfx && -z "${LIBGL_ALWAYS_SOFTWARE+x}" ]]
+}
+
 if [[ -r "$CONFIG_FILE" ]]; then
   # This is a root-owned, shell-compatible machine configuration.
   # shellcheck source=/dev/null
@@ -208,6 +221,16 @@ fi
 validate_output_config "$output_config"
 drm_device="$(resolve_drm_device)"
 render_device="$(resolve_render_device)"
+effective_render_device="${render_device:-$drm_device}"
+render_driver="$(drm_kernel_driver "$effective_render_device" || true)"
+software_rendering=0
+mesa_rendering='hardware/default'
+if should_enable_software_rendering "$render_driver"; then
+  software_rendering=1
+  mesa_rendering='software (automatic vmwgfx compatibility)'
+elif [[ -n "${LIBGL_ALWAYS_SOFTWARE+x}" ]]; then
+  mesa_rendering="environment override (LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE})"
+fi
 systemctl_bin="$(discover_user_systemctl || true)"
 if [[ -n "$systemctl_bin" ]]; then
   session_lifecycle='systemd user manager'
@@ -243,7 +266,9 @@ if [[ "${1:-}" == --check ]]; then
   printf 'ok  %-16s %s\n' 'Flutter bundle' "$bundle"
   printf 'ok  %-16s %s\n' 'output config' "$output_config"
   printf 'ok  %-16s %s\n' 'DRM device' "$drm_device"
-  printf 'ok  %-16s %s\n' 'render device' "${render_device:-$drm_device}"
+  printf 'ok  %-16s %s\n' 'render device' "$effective_render_device"
+  printf 'ok  %-16s %s\n' 'render driver' "${render_driver:-unknown}"
+  printf 'ok  %-16s %s\n' 'Mesa rendering' "$mesa_rendering"
   printf 'ok  %-16s %s\n' 'shell profile' "$DENIAL_SHELL_PROFILE"
   printf 'ok  %-16s %s\n' 'Flutter renderer' "${flutter_renderer:-impeller (default)}"
   printf 'ok  %-16s %s\n' 'Xwayland scale' "$xwayland_scale_mode"
@@ -267,6 +292,9 @@ if [[ -n "$render_device" ]]; then
 fi
 if [[ -n "$flutter_renderer" ]]; then
   denial_args+=(--flutter-renderer "$flutter_renderer")
+fi
+if [[ "$software_rendering" == 1 ]]; then
+  denial_args+=(--software-rendering)
 fi
 if [[ -n "${DENIAL_FLUTTER_DEBUG_BUNDLE:-}" ]]; then
   [[ "$DENIAL_FLUTTER_DEBUG_BUNDLE" == /* ]] \

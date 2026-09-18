@@ -8,6 +8,7 @@ import '../models/display_layout.dart';
 import '../models/denial_window.dart';
 import '../models/denial_window_event.dart';
 import '../models/shell_popup_placement.dart';
+import '../settings/shell_settings.dart';
 import 'desktop_overview_layout.dart';
 
 part 'desktop_workspace_controller.dart';
@@ -117,6 +118,20 @@ abstract final class DesktopMetrics {
   }
 }
 
+/// Clips only layout-managed scrolling tiles to their output viewport.
+///
+/// Pinned windows are floating overlays even while the desktop uses the
+/// scrolling layout, so their rendering and input regions must remain free of
+/// the tile viewport clip.
+Rect? desktopScrollingOutputClip({
+  required DesktopWindowLayout windowLayout,
+  required bool pinned,
+  required bool transformed,
+  required Rect? outputRect,
+}) => windowLayout == DesktopWindowLayout.scrolling && !pinned && !transformed
+    ? outputRect
+    : null;
+
 enum DesktopPanel { none, launcher, dashboard }
 
 @immutable
@@ -125,15 +140,114 @@ class DesktopOverviewState {
     required this.monitorId,
     required this.bounds,
     required this.backgroundBounds,
+    required this.selectedObjectId,
     required Map<int, Rect> frames,
   }) : frames = Map.unmodifiable(frames);
 
   final int monitorId;
   final Rect bounds;
   final Rect backgroundBounds;
+  final int selectedObjectId;
   final Map<int, Rect> frames;
 
   bool contains(int objectId) => frames.containsKey(objectId);
+
+  DesktopOverviewState copyWith({
+    int? selectedObjectId,
+    Map<int, Rect>? frames,
+  }) {
+    return DesktopOverviewState(
+      monitorId: monitorId,
+      bounds: bounds,
+      backgroundBounds: backgroundBounds,
+      selectedObjectId: selectedObjectId ?? this.selectedObjectId,
+      frames: frames ?? this.frames,
+    );
+  }
+}
+
+enum DesktopOverviewDirection { left, right, up, down }
+
+/// Finds the next overview preview in [direction] using the arranged geometry.
+///
+/// Candidates which overlap the current preview on the perpendicular axis are
+/// preferred. This keeps left/right movement within a justified row and
+/// up/down movement within a visual column before considering diagonal cards.
+int? desktopOverviewNeighbor({
+  required Map<int, Rect> frames,
+  required int fromObjectId,
+  required DesktopOverviewDirection direction,
+}) {
+  final source = frames[fromObjectId];
+  if (source == null) {
+    return null;
+  }
+
+  int? bestObjectId;
+  double? bestPerpendicularGap;
+  double? bestPrimaryDistance;
+  double? bestPerpendicularDistance;
+  for (final entry in frames.entries) {
+    if (entry.key == fromObjectId) {
+      continue;
+    }
+    final candidate = entry.value;
+    final (
+      primaryDistance,
+      perpendicularDistance,
+      perpendicularGap,
+    ) = switch (direction) {
+      DesktopOverviewDirection.left => (
+        source.center.dx - candidate.center.dx,
+        (source.center.dy - candidate.center.dy).abs(),
+        _separation(source.top, source.bottom, candidate.top, candidate.bottom),
+      ),
+      DesktopOverviewDirection.right => (
+        candidate.center.dx - source.center.dx,
+        (source.center.dy - candidate.center.dy).abs(),
+        _separation(source.top, source.bottom, candidate.top, candidate.bottom),
+      ),
+      DesktopOverviewDirection.up => (
+        source.center.dy - candidate.center.dy,
+        (source.center.dx - candidate.center.dx).abs(),
+        _separation(source.left, source.right, candidate.left, candidate.right),
+      ),
+      DesktopOverviewDirection.down => (
+        candidate.center.dy - source.center.dy,
+        (source.center.dx - candidate.center.dx).abs(),
+        _separation(source.left, source.right, candidate.left, candidate.right),
+      ),
+    };
+    if (primaryDistance <= 0.0) {
+      continue;
+    }
+    final better =
+        bestObjectId == null ||
+        perpendicularGap < bestPerpendicularGap! ||
+        (perpendicularGap == bestPerpendicularGap &&
+            (primaryDistance < bestPrimaryDistance! ||
+                (primaryDistance == bestPrimaryDistance &&
+                    (perpendicularDistance < bestPerpendicularDistance! ||
+                        (perpendicularDistance == bestPerpendicularDistance &&
+                            entry.key < bestObjectId)))));
+    if (better) {
+      bestObjectId = entry.key;
+      bestPerpendicularGap = perpendicularGap;
+      bestPrimaryDistance = primaryDistance;
+      bestPerpendicularDistance = perpendicularDistance;
+    }
+  }
+  return bestObjectId;
+}
+
+double _separation(double aStart, double aEnd, double bStart, double bEnd) {
+  if (aEnd < bStart) {
+    return bStart - aEnd;
+  }
+  if (bEnd < aStart) {
+    return aStart - bEnd;
+  }
+  return 0.0;
 }
 
 @immutable

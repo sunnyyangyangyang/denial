@@ -57,6 +57,17 @@ mod encode;
 use decode::validate_notification_event;
 use encode::{encode_display_layout, encode_windows_response};
 
+#[cfg(test)]
+pub(super) fn validate_cursor_state(state: &CursorStateDescription) -> Result<(), WireError> {
+    encode::validate_cursor_state(state)
+}
+
+pub(super) fn validate_cursor_state_payload(
+    state: &CursorStateDescription,
+) -> Result<(), WireError> {
+    encode::validate_cursor_state_payload(state)
+}
+
 pub const TO_NATIVE_CHANNEL: &str = "denial/wire/to_native";
 pub const TO_FLUTTER_CHANNEL: &CStr = c"denial/wire/to_flutter";
 
@@ -235,6 +246,7 @@ impl WindowCommand {
 pub enum WindowAction {
     Minimize,
     Maximize,
+    Fullscreen,
     Restore,
     // Retained for wire compatibility and explicit UI toggles. Native
     // shortcuts use idempotent Maximize/Restore transitions.
@@ -263,6 +275,10 @@ pub enum ShellAction {
     Wallpaper,
     OpenSettings,
     WorkspaceChanged,
+    FocusLeft,
+    FocusRight,
+    FocusUp,
+    FocusDown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -296,6 +312,10 @@ impl ShellAction {
             Self::Wallpaper => fb::ShellActionKind::Wallpaper,
             Self::OpenSettings => fb::ShellActionKind::OpenSettings,
             Self::WorkspaceChanged => fb::ShellActionKind::WorkspaceChanged,
+            Self::FocusLeft => fb::ShellActionKind::FocusLeft,
+            Self::FocusRight => fb::ShellActionKind::FocusRight,
+            Self::FocusUp => fb::ShellActionKind::FocusUp,
+            Self::FocusDown => fb::ShellActionKind::FocusDown,
         }
     }
 }
@@ -332,6 +352,7 @@ impl WindowAction {
         match self {
             Self::Minimize => fb::WindowActionKind::Minimize,
             Self::Maximize => fb::WindowActionKind::Maximize,
+            Self::Fullscreen => fb::WindowActionKind::Fullscreen,
             Self::Restore => fb::WindowActionKind::Restore,
             Self::ToggleMaximize => fb::WindowActionKind::ToggleMaximize,
             Self::ToggleFullscreen => fb::WindowActionKind::ToggleFullscreen,
@@ -481,6 +502,22 @@ pub enum SurfaceRoleDescription {
 pub enum WindowContentKind {
     SurfaceTree,
     LocalFlutter,
+    LayerShellBackground,
+    LayerShellBottom,
+    LayerShellTop,
+    LayerShellOverlay,
+}
+
+impl WindowContentKind {
+    pub const fn is_layer_shell(self) -> bool {
+        matches!(
+            self,
+            Self::LayerShellBackground
+                | Self::LayerShellBottom
+                | Self::LayerShellTop
+                | Self::LayerShellOverlay
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -495,6 +532,10 @@ impl WindowContentKind {
         match self {
             Self::SurfaceTree => fb::WindowContentKind::SurfaceTree,
             Self::LocalFlutter => fb::WindowContentKind::LocalFlutter,
+            Self::LayerShellBackground => fb::WindowContentKind::LayerShellBackground,
+            Self::LayerShellBottom => fb::WindowContentKind::LayerShellBottom,
+            Self::LayerShellTop => fb::WindowContentKind::LayerShellTop,
+            Self::LayerShellOverlay => fb::WindowContentKind::LayerShellOverlay,
         }
     }
 }
@@ -544,6 +585,8 @@ pub struct WindowDescription {
     pub monitor_id: i64,
     pub workspace_id: i64,
     pub minimized: bool,
+    pub fullscreen: bool,
+    pub maximized: bool,
     pub pinned: bool,
     pub transform: u32,
     pub scale_120: u32,
@@ -678,7 +721,10 @@ impl WireBridge {
     }
 
     pub fn window_ids(&self) -> impl Iterator<Item = u64> + '_ {
-        self.windows.iter().map(|window| window.window_id)
+        self.windows
+            .iter()
+            .filter(|window| !window.content_kind.is_layer_shell())
+            .map(|window| window.window_id)
     }
 
     pub fn window_descriptions(&self) -> &[WindowDescription] {

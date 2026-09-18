@@ -742,6 +742,12 @@ test_compositor() {
         kernel_test_filters=(--skip cpu_scheduling::capacity::tests::hint_preserves_priority_and_does_not_leak_to_new_threads)
     fi
     require_flutter_bindings
+    run_pinned_cargo check \
+        --locked \
+        --jobs "$BUILD_JOBS" \
+        --no-default-features \
+        --features kms \
+        --bin deniald
     command -v dbus-run-session >/dev/null 2>&1 \
         || die "dbus-run-session is required for isolated notification service tests"
     (

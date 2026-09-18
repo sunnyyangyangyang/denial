@@ -36,6 +36,15 @@ Load the packaged Flutter shell bundle from
 .BI \-\-flutter-renderer " skia|impeller"
 Select the Flutter GLES renderer. Impeller is the default.
 .TP
+.B \-\-software-rendering
+Select Mesa's
+.B kms_swrast
+driver and set
+.B LIBGL_ALWAYS_SOFTWARE=1
+before initializing GBM, EGL, or Flutter. The installed session launcher uses
+this compatibility path automatically for VMware
+.BR vmwgfx .
+.TP
 .B \-\-start-locked
 Initialize the native authentication gate and Flutter lock screen as locked.
 .TP
@@ -61,6 +70,29 @@ Override an output position for this invocation.
 .PP
 Additional reconfiguration and topology-test options are listed by
 .BR "deniald --help" .
+.SH ENVIRONMENT
+.TP
+.B LIBGL_ALWAYS_SOFTWARE
+Control Mesa's hardware or software renderer selection. The
+.B \-\-software-rendering
+option sets this to 1 and sets
+.B MESA_LOADER_DRIVER_OVERRIDE=kms_swrast
+before graphics initialization.
+.TP
+.B DENIAL_NO_PREDECESSOR=1
+Force the session-handoff KMS path without capturing a predecessor framebuffer.
+Denial automatically detects direct-boot systems whose primary plane has never
+scanned out a framebuffer. This override is intended for unusual DRM
+implementations that cannot report or expose their predecessor state. The
+default continues to preserve and restore every predecessor framebuffer that
+is present during bounded diagnostic runs.
+.PP
+Denial environment variables use the
+.B DENIAL_*
+prefix. The former
+.B DENIA_*
+spellings remain compatibility aliases; the canonical spelling takes
+precedence when both are present.
 .SH SIGNALS
 .TP
 .B SIGUSR1

@@ -63,12 +63,13 @@ impl WaylandFrontend {
     }
 
     #[cfg(feature = "flutter")]
-    pub(crate) fn reset_flutter_input_generation(&mut self) {
+    pub(crate) fn reset_flutter_input_generation(&mut self) -> bool {
         // The replacement engine has not observed the old generation's
         // layout, pressed keys, or active touch sequences. Forget them so a
         // later release/up cannot be delivered to the new engine without its
         // matching press/down. Client captures and routes remain untouched.
         self.input_layout = None;
+        let released_shell_focus = self.text_input.shell_captures_keyboard();
         self.text_input.set_shell_capture(false);
         self.text_input.retire_flutter_generation();
         self.synchronize_input_method();
@@ -85,10 +86,7 @@ impl WaylandFrontend {
             &mut self.flutter_keyboard_keys,
             &mut self.retired_keyboard_keys,
         );
-        input::retire_flutter_generation_keys(
-            &mut self.flutter_input_method_keys,
-            &mut self.retired_input_method_keys,
-        );
+        released_shell_focus
     }
 
     pub(super) fn surface_under(
@@ -282,6 +280,27 @@ impl WaylandFrontend {
             }
         }
         let callback_millis = callback_time.as_millis() as u32;
+        if !self.pending_layer_frame_callback_roots.is_empty()
+            && let Some(output) = self.outputs.iter().find(|output| output.id == tick.output)
+        {
+            let map = layer_map_for_output(&output.output);
+            for layer in map.layers() {
+                let root = layer.wl_surface();
+                if !self.pending_layer_frame_callback_roots.remove(&root.id()) {
+                    continue;
+                }
+                sent = sent.saturating_add(presentation::send_surface_frame_callbacks(
+                    root,
+                    callback_millis,
+                ));
+                for (popup, _) in PopupManager::popups_for_surface(root) {
+                    sent = sent.saturating_add(presentation::send_surface_frame_callbacks(
+                        popup.wl_surface(),
+                        callback_millis,
+                    ));
+                }
+            }
+        }
         if !self.pending_cursor_frame_callback_roots.is_empty()
             && cursor_frame_callback_matches(self.cursor_output, tick.output)
         {
@@ -328,6 +347,9 @@ impl WaylandFrontend {
     pub fn after_present(&mut self) -> Result<(), Box<dyn Error>> {
         self.presentation.presented();
         self.space.refresh();
+        for output in &self.outputs {
+            layer_map_for_output(&output.output).cleanup();
+        }
         self.popups.cleanup();
         self.display_handle.flush_clients()?;
         Ok(())

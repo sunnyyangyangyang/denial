@@ -17,17 +17,17 @@ The audit is compiled into release builds but is opt-in. Start a development
 session with:
 
 ```sh
-DENIA_RENDER_AUDIT=1 tools/denial-pc session
+DENIAL_RENDER_AUDIT=1 tools/denial-pc session
 ```
 
 To keep only the audit records in an interactive terminal:
 
 ```sh
-DENIA_RENDER_AUDIT=1 tools/denial-pc session 2>&1 \
+DENIAL_RENDER_AUDIT=1 tools/denial-pc session 2>&1 \
   | rg --line-buffered 'render_audit'
 ```
 
-Without `DENIA_RENDER_AUDIT`, Denial creates no report timers, timing sample
+Without `DENIAL_RENDER_AUDIT`, Denial creates no report timers, timing sample
 vectors, Flutter timing callback, or damage-summary strings. Audit mode retains
 every timing sample for one second and sorts those samples for percentiles. It
 is intentionally capable of adding overhead and should not be used as the

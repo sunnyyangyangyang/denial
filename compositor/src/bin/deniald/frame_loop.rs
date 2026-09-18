@@ -161,6 +161,7 @@ pub(super) fn run_frame_loop(
             let next = atlas_swapchain.next_index();
             if let Some(frontend) = events.wayland.as_mut() {
                 frontend.process_pending_dmabufs(renderer)?;
+                frontend.process_toplevel_screencopies(renderer)?;
                 frontend.render(renderer, &mut atlas_swapchain.buffers[next].dmabuf)?;
             } else {
                 render_diagnostic_atlas(
@@ -301,7 +302,9 @@ pub(super) fn run_frame_loop(
                 frame_number,
                 event_loop,
                 events: &mut events,
+                #[cfg(feature = "flutter")]
                 flutter: &mut flutter,
+                #[cfg(feature = "flutter")]
                 flutter_launcher: flutter_launcher.as_deref_mut(),
             })?;
         }
@@ -346,7 +349,9 @@ pub(super) fn run_frame_loop(
                     frame_number,
                     event_loop,
                     events: &mut events,
+                    #[cfg(feature = "flutter")]
                     flutter: &mut flutter,
+                    #[cfg(feature = "flutter")]
                     flutter_launcher: flutter_launcher.as_deref_mut(),
                 })?;
             }

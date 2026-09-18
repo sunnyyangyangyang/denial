@@ -1,6 +1,8 @@
 //! Ownership and rollback state for DRM scanouts and render-target buffers.
 
-use super::kms_render::{output_plane_state, plane_state, plane_state_for_mode};
+#[cfg(feature = "flutter")]
+use super::kms_render::output_plane_state;
+use super::kms_render::{plane_state, plane_state_for_mode};
 use super::*;
 #[cfg(feature = "flutter")]
 use denial_core::topology::{RenderOutputPlan, RenderViewId};

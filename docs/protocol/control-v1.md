@@ -256,7 +256,7 @@ for mutations, after the native live update and persistent commit succeed.
 | `settings.keyboard.get` | none | Layouts, XKB options, repeat settings, active layout, and revision |
 | `settings.keyboard.apply` | revision plus a `keyboard` object | Compile/install XKB state and commit it atomically |
 | `settings.input.get` | none | Touchpad availability and current preferences |
-| `settings.touchpad.apply` | revision plus a `touchpad` object | Apply libinput preferences and commit them |
+| `settings.touchpad.apply` | revision plus a `touchpad` object | Apply touchpad preferences and commit them |
 | `settings.shortcuts.get` | none | Bindings, supported actions/inputs, and revision |
 | `settings.shortcuts.validate` | `shortcut` and optional `existing_shortcut` | Canonical validation result without mutation |
 | `settings.shortcuts.add` | revision and `shortcut` | Add and commit a binding |

@@ -128,11 +128,15 @@ impl WaylandFrontend {
         };
         let changed = entry.powered != powered;
         entry.powered = powered;
+        #[cfg(feature = "flutter")]
         if changed {
             self.invalidate_frame_timeline();
         }
         if !powered {
             self.fail_screencopies_for_output(output);
+        }
+        if changed {
+            self.refresh_image_copy_constraints();
         }
         if let Some(resource) = self.output_power.controllers.get(&output) {
             resource.mode(if powered {

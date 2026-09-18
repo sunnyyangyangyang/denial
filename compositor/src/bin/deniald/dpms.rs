@@ -156,6 +156,19 @@ pub(super) fn synchronize_power_button(scanouts: &[Scanout], events: &mut Runtim
     if !events.power_button.take_toggle() {
         return;
     }
+    let action = events.idle_policy.power_button_action();
+    if action != idle_policy::PowerButtonAction::Dpms {
+        if events
+            .system_controls
+            .as_ref()
+            .is_some_and(|controls| controls.power_button_action(action))
+        {
+            info!(?action, "power button requested system power action");
+        } else {
+            warn!(?action, "could not request power-button system action");
+        }
+        return;
+    }
     events.fingerprint.independent_wake();
     // Queued requests are the effective state until the atomic KMS gate runs.
     let outputs = scanouts
@@ -258,6 +271,7 @@ pub(super) fn synchronize_idle_dpms_configuration(
             .suspend_mode
             .kernel_value()
             .unwrap_or("system-default"),
+        power_button_action = ?configuration.power_button_action,
         "configured automatic inactivity policy"
     );
 }

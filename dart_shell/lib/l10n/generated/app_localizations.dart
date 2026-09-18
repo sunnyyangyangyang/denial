@@ -2423,6 +2423,54 @@ abstract class AppLocalizations {
   /// **'Automatic idle actions'**
   String get settingsAutomaticIdleTitle;
 
+  /// Title for physical power button behavior settings.
+  ///
+  /// In en, this message translates to:
+  /// **'Power button'**
+  String get settingsPowerButtonTitle;
+
+  /// Label for the physical power button action selector.
+  ///
+  /// In en, this message translates to:
+  /// **'Action'**
+  String get settingsPowerButtonAction;
+
+  /// Explanation for the physical power button action selector.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose what happens when you press the physical power button.'**
+  String get settingsPowerButtonDescription;
+
+  /// Power button action that suspends the system.
+  ///
+  /// In en, this message translates to:
+  /// **'Suspend'**
+  String get settingsPowerButtonSuspend;
+
+  /// Power button action that hibernates the system.
+  ///
+  /// In en, this message translates to:
+  /// **'Hibernate'**
+  String get settingsPowerButtonHibernate;
+
+  /// Disabled persisted hibernate action when hibernation is unavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Hibernate (unavailable)'**
+  String get settingsPowerButtonHibernateUnavailable;
+
+  /// Power button action that toggles compositor-owned display power.
+  ///
+  /// In en, this message translates to:
+  /// **'Turn off displays (DPMS)'**
+  String get settingsPowerButtonDpms;
+
+  /// Power button action that powers off the system.
+  ///
+  /// In en, this message translates to:
+  /// **'Power off'**
+  String get settingsPowerButtonPowerOff;
+
   /// Toggle for automatically locking the session after inactivity.
   ///
   /// In en, this message translates to:
@@ -2854,6 +2902,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Transparency material'**
   String get settingsTransparencyTitle;
+
+  /// Title for shell typography appearance settings.
+  ///
+  /// In en, this message translates to:
+  /// **'Typography'**
+  String get settingsTypographyTitle;
 
   /// Transparency material choice that disables backdrop processing.
   ///
@@ -3514,6 +3568,30 @@ abstract class AppLocalizations {
   /// **'Focused windows'**
   String get settingsFocusedWindows;
 
+  /// Description shown while the shell font catalog is loading.
+  ///
+  /// In en, this message translates to:
+  /// **'Finding installed fonts…'**
+  String get settingsFontCatalogLoading;
+
+  /// Explanation for the shell font family selector.
+  ///
+  /// In en, this message translates to:
+  /// **'Use the system default or an installed font across the Denial shell.'**
+  String get settingsFontDescription;
+
+  /// Label for the shell font family selector.
+  ///
+  /// In en, this message translates to:
+  /// **'Font family'**
+  String get settingsFontFamily;
+
+  /// Option that restores the platform's default font family.
+  ///
+  /// In en, this message translates to:
+  /// **'System default'**
+  String get settingsFontSystemDefault;
+
   /// Toggle label for changing the focused window border to the accent colour.
   ///
   /// In en, this message translates to:
@@ -3813,6 +3891,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Finger scroll speed'**
   String get settingsTouchpadScrollSpeed;
+
+  /// Label for the continuous three-finger scrolling-layout swipe speed slider.
+  ///
+  /// In en, this message translates to:
+  /// **'Scrolling layout swipe speed'**
+  String get settingsTouchpadScrollingLayoutSwipeSpeed;
 
   /// Label for the mouse pointer speed slider.
   ///
@@ -4453,7 +4537,7 @@ abstract class AppLocalizations {
   /// Explains the available desktop window layouts.
   ///
   /// In en, this message translates to:
-  /// **'Stacking lets windows overlap. Tiling divides the desktop dynamically. Scrolling arranges full-height columns in a focus-following horizontal strip.'**
+  /// **'Stacking lets windows overlap. Tiling divides the desktop dynamically. Scrolling follows focus along a strip that turns vertical with a quarter-turned monitor.'**
   String get settingsWindowLayoutDescription;
 
   /// Label for the Dwindle tiling window layout.
@@ -4468,7 +4552,7 @@ abstract class AppLocalizations {
   /// **'Stacking'**
   String get settingsWindowLayoutStacking;
 
-  /// Label for the focus-following horizontal scrolling layout.
+  /// Label for the focus-following adaptive-axis scrolling layout.
   ///
   /// In en, this message translates to:
   /// **'Scrolling'**

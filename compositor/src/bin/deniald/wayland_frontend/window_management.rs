@@ -1,19 +1,12 @@
 use smithay::desktop::Window;
 use smithay::output::Output;
-use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_output;
 use smithay::utils::{Logical, Rectangle, Size};
 #[cfg(feature = "flutter")]
 use smithay::utils::{Point, SERIAL_COUNTER};
-use smithay::wayland::compositor::with_states;
 #[cfg(feature = "flutter")]
 use smithay::wayland::seat::WaylandFocus;
-#[cfg(feature = "flutter")]
-use smithay::wayland::shell::xdg::SurfaceCachedState;
-use smithay::wayland::shell::xdg::{ToplevelSurface, XdgToplevelSurfaceData};
-#[cfg(feature = "flutter")]
-use smithay::xwayland::xwm::{WmWindowType, X11Surface};
 use tracing::warn;
 
 #[cfg(feature = "flutter")]
@@ -28,8 +21,13 @@ use super::super::window_placement_store::RestoredWindowPlacement;
 use super::super::wire::{
     WindowAction, WindowCommand, WindowGeometry, WindowPlacementChange, WindowPlacementPhase,
 };
+use super::WindowGeometryAuthority;
 #[cfg(feature = "flutter")]
 use super::clamp_window_geometry;
+#[cfg(feature = "flutter")]
+use super::focus::clear_keyboard_focus;
+use super::focus::request_keyboard_focus;
+use super::managed_window::{ClientStateRequestKind, ManagedWindow};
 
 fn bound_geometry_size(mut geometry: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
     geometry.size = Size::from((
@@ -44,9 +42,9 @@ fn configured_window_size(
     requested: Size<i32, Logical>,
     minimum: Size<i32, Logical>,
     maximum: Size<i32, Logical>,
-    exact: bool,
+    compositor_owned: bool,
 ) -> Size<i32, Logical> {
-    if exact {
+    if compositor_owned {
         requested
     } else {
         Size::from((
@@ -56,45 +54,12 @@ fn configured_window_size(
     }
 }
 
-fn client_restore_geometry(
-    initial_configure_sent: bool,
-    geometry: Rectangle<i32, Logical>,
-) -> Option<Rectangle<i32, Logical>> {
-    (initial_configure_sent && geometry.size.w > 0 && geometry.size.h > 0)
-        .then(|| bound_geometry_size(geometry))
-}
-
-#[cfg(feature = "flutter")]
 // Must match DesktopMetrics.frameBorder in the embedded shell.
-const SHELL_FRAME_BORDER: i32 = 1;
+pub(super) const SHELL_FRAME_BORDER: i32 = 1;
 
 #[cfg(feature = "flutter")]
 pub(super) fn shell_draws_server_frame(window: &Window) -> bool {
-    if window.toplevel().is_some() {
-        return true;
-    }
-    window
-        .x11_surface()
-        .is_some_and(shell_draws_x11_server_frame)
-}
-
-#[cfg(feature = "flutter")]
-pub(super) fn shell_draws_x11_server_frame(x11: &X11Surface) -> bool {
-    // Denial owns the frame for managed X11 toplevels regardless of client
-    // decoration hints. Protocol-level popups remain unframed.
-    !x11.is_override_redirect()
-        && !matches!(
-            x11.window_type(),
-            Some(
-                WmWindowType::Combo
-                    | WmWindowType::Dnd
-                    | WmWindowType::DropdownMenu
-                    | WmWindowType::Menu
-                    | WmWindowType::Notification
-                    | WmWindowType::PopupMenu
-                    | WmWindowType::Tooltip
-            )
-        )
+    ManagedWindow::new(window).is_some_and(|window| window.facts().server_side_decorated)
 }
 
 #[cfg(feature = "flutter")]
@@ -122,46 +87,30 @@ pub(super) fn shell_content_geometry(
 /// SUPER+F and causes normal shell resize commands to be rejected.
 #[cfg(feature = "flutter")]
 pub(super) fn clear_client_geometry_constraints(window: &Window) -> bool {
-    if let Some(toplevel) = window.toplevel() {
-        if !toplevel.wl_surface().is_alive() {
-            return false;
-        }
-        return toplevel.with_pending_state(|pending| {
-            let fullscreen = pending.states.unset(xdg_toplevel::State::Fullscreen);
-            let maximized = pending.states.unset(xdg_toplevel::State::Maximized);
-            if fullscreen {
-                pending.fullscreen_output = None;
-            }
-            fullscreen || maximized
-        });
-    }
-
-    let Some(x11) = window.x11_surface() else {
-        return false;
-    };
-    let fullscreen = x11.is_fullscreen();
-    let maximized = x11.is_maximized();
-    if fullscreen && let Err(error) = x11.set_fullscreen(false) {
-        warn!(%error, window = x11.window_id(), "could not clear X11 fullscreen for shell geometry");
-    }
-    if maximized && let Err(error) = x11.set_maximized(false) {
-        warn!(%error, window = x11.window_id(), "could not clear X11 maximized state for shell geometry");
-    }
-    fullscreen || maximized
+    ManagedWindow::new(window).is_some_and(|window| window.clear_geometry_constraints())
 }
 
+/// Applies shell-owned geometry through the one managed-window adapter.
+///
+/// Policy callers never branch on XDG versus Xwayland. The only backend
+/// distinction is the terminal protocol handshake: XDG needs a configure
+/// serial, while `set_window_geometry_target` emits the X11 configure.
 #[cfg(feature = "flutter")]
-pub(super) fn set_toplevel_suspended(toplevel: &ToplevelSurface, suspended: bool) -> bool {
-    if !toplevel.wl_surface().is_alive() {
-        return false;
+fn configure_shell_owned_geometry(
+    state: &mut RuntimeState,
+    window: &Window,
+    target: Rectangle<i32, Logical>,
+    authority: WindowGeometryAuthority,
+) {
+    clear_client_geometry_constraints(window);
+    if let Some(window) = ManagedWindow::new(window) {
+        window.prepare_shell_geometry(target);
     }
-    toplevel.with_pending_state(|pending| {
-        if suspended {
-            pending.states.set(xdg_toplevel::State::Suspended)
-        } else {
-            pending.states.unset(xdg_toplevel::State::Suspended)
-        }
-    })
+    state
+        .wayland
+        .as_mut()
+        .expect("missing Wayland frontend")
+        .set_window_geometry_target_with_authority(window, target, authority);
 }
 
 #[cfg(feature = "flutter")]
@@ -171,6 +120,15 @@ fn preserves_client_fullscreen_geometry(
     requested_target: Rectangle<i32, Logical>,
 ) -> bool {
     client_fullscreen && current_target == requested_target
+}
+
+#[cfg(feature = "flutter")]
+fn authoritative_geometry_rejects_configure(
+    geometry_owned: bool,
+    current_target: Rectangle<i32, Logical>,
+    requested_target: Rectangle<i32, Logical>,
+) -> bool {
+    geometry_owned && current_target != requested_target
 }
 
 #[cfg(feature = "flutter")]
@@ -253,8 +211,8 @@ pub(super) fn activate_window(
             resumed = frontend
                 .window_root_surface(window)
                 .is_some_and(|surface| frontend.set_surface_minimized(surface.id(), false));
-            if resumed && let Some(toplevel) = window.toplevel() {
-                set_toplevel_suspended(toplevel, false);
+            if resumed && let Some(managed) = ManagedWindow::new(window) {
+                managed.prepare_minimized(false);
             }
             if resumed {
                 frontend.reconcile_window_layout(window);
@@ -263,24 +221,16 @@ pub(super) fn activate_window(
         #[cfg(not(feature = "flutter"))]
         let resumed = false;
 
-        if let Some(x11) = window.x11_surface()
-            && let Err(error) = x11.set_hidden(false)
-        {
-            warn!(%error, window = x11.window_id(), "could not restore activated X11 window");
-        }
         frontend.raise_window(window, true);
         for candidate in frontend.space.elements() {
             let changed = candidate.set_activated(candidate == window);
-            if let Some(toplevel) = candidate.toplevel()
-                && (changed || (candidate == window && resumed))
-                && toplevel.wl_surface().is_alive()
-            {
-                toplevel.send_pending_configure();
+            if let Some(managed) = ManagedWindow::new(candidate) {
+                managed.prepare_activation(changed || (candidate == window && resumed));
             }
         }
     }
 
-    keyboard.set_focus(state, Some(keyboard_focus), serial);
+    request_keyboard_focus(state, &keyboard, Some(keyboard_focus), serial);
     #[cfg(feature = "flutter")]
     if let Some(window_id) = window_id {
         state
@@ -309,9 +259,8 @@ pub(super) fn activate_topmost_window(state: &mut RuntimeState) -> bool {
             .space
             .elements()
             .rfind(|candidate| {
-                candidate
-                    .x11_surface()
-                    .is_none_or(|x11| !x11.is_override_redirect())
+                ManagedWindow::new(candidate)
+                    .is_some_and(|managed| !managed.facts().override_redirect)
                     && frontend.window_root_surface(candidate).is_some_and(|root| {
                         root.is_alive()
                             && !frontend.minimized_windows.contains(&root.id())
@@ -323,6 +272,69 @@ pub(super) fn activate_topmost_window(state: &mut RuntimeState) -> bool {
             .cloned()
     };
     next.is_some_and(|window| activate_window(state, &window, SERIAL_COUNTER.next_serial()))
+}
+
+/// Gives focus to a usable window when a workspace has no remembered target.
+///
+/// Native windows retain a compositor-owned stacking order, so try them from
+/// topmost to bottommost. Local Flutter windows do not currently have an
+/// equivalent native stack; they remain a last-resort target for workspaces
+/// that contain no activatable client window.
+#[cfg(feature = "flutter")]
+fn activate_workspace_fallback(
+    state: &mut RuntimeState,
+    monitor_id: i64,
+    workspace_id: u8,
+) -> bool {
+    let Some(output_id) = u64::try_from(monitor_id).ok() else {
+        return false;
+    };
+    let (client_windows, local_window_ids) = {
+        let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
+        let belongs_to_workspace = |window_id| {
+            frontend
+                .workspace_location(window_id)
+                .is_some_and(|location| {
+                    location.output.0 == output_id && location.workspace == workspace_id
+                })
+        };
+        let client_windows = frontend
+            .space
+            .elements()
+            .rev()
+            .filter(|candidate| {
+                ManagedWindow::new(candidate)
+                    .is_some_and(|managed| !managed.facts().override_redirect)
+                    && frontend.window_root_surface(candidate).is_some_and(|root| {
+                        root.is_alive()
+                            && !frontend.minimized_windows.contains(&root.id())
+                            && frontend
+                                .surface_id(&root)
+                                .is_some_and(&belongs_to_workspace)
+                    })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let local_window_ids = frontend
+            .local_windows
+            .iter()
+            .filter(|window| {
+                !frontend.minimized_local_windows.contains(&window.id)
+                    && belongs_to_workspace(window.id)
+            })
+            .map(|window| window.id)
+            .collect::<Vec<_>>();
+        (client_windows, local_window_ids)
+    };
+
+    for window in client_windows {
+        if activate_window(state, &window, SERIAL_COUNTER.next_serial()) {
+            return true;
+        }
+    }
+    local_window_ids
+        .into_iter()
+        .any(|window_id| activate_local_flutter_window(state, window_id))
 }
 
 #[cfg(feature = "flutter")]
@@ -435,13 +447,7 @@ pub(in super::super) fn apply_window_commands(
 
         match command {
             WindowCommand::Close { .. } => {
-                if let Some(toplevel) = window.toplevel() {
-                    toplevel.send_close();
-                } else if let Some(x11) = window.x11_surface()
-                    && let Err(error) = x11.close()
-                {
-                    warn!(%error, window_id, "could not close X11 window");
-                }
+                close_window(&window);
             }
             WindowCommand::Focus { .. } => {
                 activate_window(state, &window, SERIAL_COUNTER.next_serial());
@@ -471,7 +477,7 @@ pub(in super::super) fn apply_window_commands(
                     let layout_geometry = {
                         let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
                         frontend
-                            .apply_layout_drop(&window, drop_location)
+                            .apply_layout_drop(&window, drop_location, None)
                             .then(|| frontend.window_geometry_target(&window))
                     };
                     if let Some(layout_geometry) = layout_geometry {
@@ -498,39 +504,49 @@ pub(in super::super) fn apply_window_commands(
                         .configure_mobile_window(&window);
                     continue;
                 }
+                let layout_managed = state
+                    .wayland
+                    .as_ref()
+                    .expect("missing Wayland frontend")
+                    .window_is_layout_managed(&window);
+                let geometry_owned = layout_managed
+                    || state
+                        .wayland
+                        .as_ref()
+                        .expect("missing Wayland frontend")
+                        .window_geometry_authoritative(&window);
                 let requested_size = Size::<i32, Logical>::from((
                     geometry.width.round() as i32,
                     geometry.height.round() as i32,
                 ));
-                let (minimum, maximum) = if let Some(toplevel) = window.toplevel() {
-                    if !exact && toplevel_has_state(toplevel, xdg_toplevel::State::Resizing) {
-                        warn!(
-                            window_id,
-                            "ignored Flutter configure during an active XDG resize"
-                        );
-                        continue;
-                    }
-                    with_states(toplevel.wl_surface(), |states| {
-                        let mut cached = states.cached_state.get::<SurfaceCachedState>();
-                        let current = cached.current();
-                        (current.min_size, current.max_size)
-                    })
-                } else if let Some(x11) = window.x11_surface() {
-                    if x11.is_override_redirect() {
-                        warn!(
-                            window_id,
-                            "ignored Flutter configure for an override-redirect X11 window"
-                        );
-                        continue;
-                    }
-                    (
-                        x11.min_size().unwrap_or_else(|| Size::from((1, 1))),
-                        x11.max_size().unwrap_or_else(|| Size::from((0, 0))),
-                    )
-                } else {
+                let Some(managed) = ManagedWindow::new(&window) else {
                     continue;
                 };
-                let size = configured_window_size(requested_size, minimum, maximum, exact);
+                let facts = managed.facts();
+                if !exact && facts.client_state.resizing {
+                    warn!(
+                        window_id,
+                        "ignored Flutter configure during an active client resize"
+                    );
+                    continue;
+                }
+                if facts.override_redirect {
+                    warn!(
+                        window_id,
+                        "ignored Flutter configure for an unmanaged window"
+                    );
+                    continue;
+                }
+                // Fullscreen owns the output rectangle. Games commonly make
+                // their current maximized resolution both the X11 minimum and
+                // maximum; honoring those hints here would leave the native
+                // surface maximized while Flutter stretches it fullscreen.
+                let size = configured_window_size(
+                    requested_size,
+                    facts.minimum_size,
+                    facts.maximum_size,
+                    exact || geometry_owned,
+                );
                 let scene_origin = state
                     .wayland
                     .as_ref()
@@ -547,21 +563,22 @@ pub(in super::super) fn apply_window_commands(
                 let target = Rectangle::new(target_location, size);
                 if !exact {
                     let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
-                    if frontend.window_is_layout_managed(&window)
-                        && frontend.window_geometry_target(&window) != target
-                    {
+                    if authoritative_geometry_rejects_configure(
+                        geometry_owned,
+                        frontend.window_geometry_target(&window),
+                        target,
+                    ) {
                         // Flutter mirrors compositor geometry for rendering and
                         // also emits interactive stacking placement. A managed
-                        // layout remains the sole geometry authority.
+                        // layout remains the sole geometry authority, except
+                        // while shell fullscreen temporarily overlays its
+                        // retained tile.
                         continue;
                     }
                 }
                 let (preserve_client_fullscreen, transferred_shell_restore) = {
                     let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-                    let client_fullscreen =
-                        window.toplevel().is_some_and(|toplevel| {
-                            toplevel_has_state(toplevel, xdg_toplevel::State::Fullscreen)
-                        }) || window.x11_surface().is_some_and(|x11| x11.is_fullscreen());
+                    let client_fullscreen = facts.client_state.fullscreen;
                     let current_target = frontend.window_geometry_target(&window);
                     let preserve_client_fullscreen = !exact
                         && preserves_client_fullscreen_geometry(
@@ -631,15 +648,7 @@ pub(in super::super) fn apply_window_commands(
                         .restore_window_geometries
                         .remove(&root_surface.id());
                 }
-                if let Some(toplevel) = window.toplevel() {
-                    toplevel.with_pending_state(|pending| {
-                        if exact {
-                            pending.states.unset(xdg_toplevel::State::Resizing);
-                        }
-                        pending.size = Some(size);
-                    });
-                    toplevel.send_pending_configure();
-                }
+                managed.prepare_shell_geometry(target);
                 let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
                 frontend.set_window_geometry_target_policy(&window, target, exact);
                 if transferred_shell_restore {
@@ -715,20 +724,25 @@ pub(super) fn switch_monitor_workspace(
         .wayland
         .as_ref()
         .and_then(|frontend| frontend.remembered_workspace_focus(monitor_id, workspace_id));
-    if let Some(window_id) = remembered {
+    let restored_focus = remembered.is_some_and(|window_id| {
         if state
             .wayland
             .as_ref()
             .is_some_and(|frontend| frontend.is_local_flutter_window(window_id))
         {
-            activate_local_flutter_window(state, window_id);
+            activate_local_flutter_window(state, window_id)
         } else if let Some(window) = state
             .wayland
             .as_ref()
             .and_then(|frontend| frontend.window_for_id(window_id))
         {
-            activate_window(state, &window, SERIAL_COUNTER.next_serial());
+            activate_window(state, &window, SERIAL_COUNTER.next_serial())
+        } else {
+            false
         }
+    });
+    if !restored_focus {
+        activate_workspace_fallback(state, monitor_id, workspace_id);
     }
     state.scene_sync.mark_dirty();
     true
@@ -890,7 +904,7 @@ pub(super) fn activate_local_flutter_window(state: &mut RuntimeState, window_id:
         .get_keyboard()
         .expect("seat has no keyboard");
     deactivate_client_windows(state.wayland.as_mut().expect("missing Wayland frontend"));
-    keyboard.set_focus(state, None, SERIAL_COUNTER.next_serial());
+    clear_keyboard_focus(state, &keyboard, SERIAL_COUNTER.next_serial());
     state
         .pending_window_events
         .push(PendingWindowEvent::Activated(window_id));
@@ -902,11 +916,8 @@ pub(super) fn activate_local_flutter_window(state: &mut RuntimeState, window_id:
 fn deactivate_client_windows(frontend: &mut super::WaylandFrontend) {
     for candidate in frontend.space.elements() {
         let changed = candidate.set_activated(false);
-        if let Some(candidate) = candidate.toplevel()
-            && changed
-            && candidate.wl_surface().is_alive()
-        {
-            candidate.send_pending_configure();
+        if let Some(managed) = ManagedWindow::new(candidate) {
+            managed.prepare_activation(changed);
         }
     }
 }
@@ -1068,63 +1079,8 @@ pub(super) fn queue_restored_window_state(
         queue_window_action_for_window(state, window, WindowAction::Maximize);
     }
     if restored.state.fullscreen {
-        queue_window_action_for_window(state, window, WindowAction::ToggleFullscreen);
+        queue_window_action_for_window(state, window, WindowAction::Fullscreen);
     }
-}
-
-#[cfg(feature = "flutter")]
-pub(super) fn queue_window_action(
-    state: &mut RuntimeState,
-    surface: &ToplevelSurface,
-    action: WindowAction,
-) {
-    let window = state
-        .wayland
-        .as_ref()
-        .and_then(|frontend| frontend.window_for_root_surface(surface.wl_surface()));
-    if let Some(window) = window {
-        queue_window_action_for_window(state, &window, action);
-    }
-}
-
-#[cfg(feature = "flutter")]
-pub(super) fn toplevel_shell_geometry_locked(
-    state: &RuntimeState,
-    surface: &ToplevelSurface,
-) -> bool {
-    state.wayland.as_ref().is_some_and(|frontend| {
-        frontend
-            .window_for_root_surface(surface.wl_surface())
-            .as_ref()
-            .is_some_and(|window| frontend.window_shell_fullscreen_locked(window))
-    })
-}
-
-#[cfg(feature = "flutter")]
-pub(super) fn reassert_exact_toplevel_geometry(
-    state: &mut RuntimeState,
-    surface: &ToplevelSurface,
-) -> bool {
-    let exact = state.wayland.as_ref().and_then(|frontend| {
-        frontend
-            .window_for_root_surface(surface.wl_surface())
-            .and_then(|window| frontend.exact_window_geometry(&window))
-    });
-    let Some(exact) = exact else {
-        return false;
-    };
-    surface.with_pending_state(|pending| {
-        pending.states.unset(xdg_toplevel::State::Fullscreen);
-        pending.states.unset(xdg_toplevel::State::Maximized);
-        pending.states.unset(xdg_toplevel::State::Resizing);
-        pending.fullscreen_output = None;
-        pending.size = Some(exact.size);
-    });
-    if surface.is_initial_configure_sent() {
-        surface.send_configure();
-    }
-    state.scene_sync.mark_dirty();
-    true
 }
 
 #[cfg(feature = "flutter")]
@@ -1231,13 +1187,10 @@ pub(super) fn release_window_focus(state: &mut RuntimeState, window: &Window) ->
         .get_keyboard()
         .expect("seat has no keyboard");
     let changed = window.set_activated(false);
-    if let Some(toplevel) = window.toplevel()
-        && changed
-        && toplevel.wl_surface().is_alive()
-    {
-        toplevel.send_pending_configure();
+    if let Some(managed) = ManagedWindow::new(window) {
+        managed.prepare_activation(changed);
     }
-    keyboard.set_focus(state, None, SERIAL_COUNTER.next_serial());
+    clear_keyboard_focus(state, &keyboard, SERIAL_COUNTER.next_serial());
     state.scene_sync.mark_dirty();
     true
 }
@@ -1295,12 +1248,16 @@ pub(super) fn toggle_always_on_top_focused_toplevel(state: &mut RuntimeState) ->
             true
         }
     };
-    if pinned && let Some(window) = client_window {
-        state
-            .wayland
-            .as_mut()
-            .expect("missing Wayland frontend")
-            .raise_window(&window, true);
+    if let Some(window) = client_window {
+        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+        // Pinned windows are floating overlays in every layout. Reconcile
+        // immediately so pinning collapses the vacated tile and restores the
+        // saved stacking rectangle, while unpinning enrolls the current
+        // floating rectangle as the next restore geometry.
+        frontend.reconcile_window_layout(&window);
+        if pinned {
+            frontend.raise_window(&window, true);
+        }
     }
     state.scene_sync.mark_dirty();
     true
@@ -1331,9 +1288,7 @@ pub(super) fn minimize_all_toplevels(state: &mut RuntimeState) -> bool {
             .space
             .elements()
             .filter(|window| {
-                window
-                    .x11_surface()
-                    .is_none_or(|x11| !x11.is_override_redirect())
+                ManagedWindow::new(window).is_some_and(|managed| !managed.facts().override_redirect)
                     && frontend.window_root_surface(window).is_some_and(|root| {
                         root.is_alive()
                             && !frontend.minimized_windows.contains(&root.id())
@@ -1386,36 +1341,7 @@ pub(super) fn minimize_toplevel_by_id(state: &mut RuntimeState, window_id: u64) 
 
 #[cfg(feature = "flutter")]
 fn minimize_window(state: &mut RuntimeState, window: &Window) -> bool {
-    let Some(root) = state
-        .wayland
-        .as_ref()
-        .and_then(|frontend| frontend.window_root_surface(window))
-    else {
-        return false;
-    };
-    state
-        .wayland
-        .as_mut()
-        .expect("missing Wayland frontend")
-        .set_surface_minimized(root.id(), true);
-    state
-        .wayland
-        .as_mut()
-        .expect("missing Wayland frontend")
-        .remove_window_from_layout(window, false);
-    if let Some(toplevel) = window.toplevel()
-        && set_toplevel_suspended(toplevel, true)
-    {
-        toplevel.send_pending_configure();
-    }
-    // Minimization is a shell visibility state. X11Surface::set_hidden(true)
-    // advertises IconicState/_NET_WM_STATE_HIDDEN and explicitly permits the
-    // application to stop rendering, which would make its live Flutter texture
-    // stale or black. Keep the client mapped and producing frames.
-    queue_window_action_for_window(state, window, WindowAction::Minimize);
-    release_window_focus(state, window);
-    state.scene_sync.mark_dirty();
-    true
+    apply_managed_minimize(state, window, true)
 }
 
 #[cfg(feature = "flutter")]
@@ -1458,18 +1384,7 @@ pub(super) fn close_toplevel_by_id(state: &mut RuntimeState, window_id: u64) -> 
 
 #[cfg(feature = "flutter")]
 fn close_window(window: &Window) -> bool {
-    if let Some(toplevel) = window.toplevel() {
-        toplevel.send_close();
-        true
-    } else if let Some(x11) = window.x11_surface() {
-        if let Err(error) = x11.close() {
-            warn!(%error, "could not close X11 window");
-            return false;
-        }
-        true
-    } else {
-        false
-    }
+    ManagedWindow::new(window).is_some_and(|window| window.close())
 }
 
 #[cfg(feature = "flutter")]
@@ -1485,20 +1400,13 @@ pub(super) fn toggle_shell_maximize_focused_toplevel(state: &mut RuntimeState) -
     let Some(window) = focused_window(state) else {
         return false;
     };
-    let (client_fullscreen, client_maximized) = if let Some(toplevel) = window.toplevel() {
-        (
-            toplevel_has_state(toplevel, xdg_toplevel::State::Fullscreen),
-            toplevel_has_state(toplevel, xdg_toplevel::State::Maximized),
-        )
-    } else if let Some(x11) = window.x11_surface() {
-        (x11.is_fullscreen(), x11.is_maximized())
-    } else {
-        (false, false)
-    };
+    let client = ManagedWindow::new(&window)
+        .map(|window| window.facts().client_state)
+        .unwrap_or_default();
 
     let (target, action) = {
         let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-        if client_fullscreen || frontend.window_geometry_locked(&window) {
+        if client.fullscreen || frontend.window_geometry_locked(&window) {
             // SUPER+Up is a no-op while true fullscreen is active.
             return true;
         }
@@ -1512,7 +1420,7 @@ pub(super) fn toggle_shell_maximize_focused_toplevel(state: &mut RuntimeState) -
         {
             frontend.restore_window_geometries.remove(&surface_id);
             (bound_geometry_size(restore), WindowAction::Restore)
-        } else if client_maximized {
+        } else if client.maximized {
             let restore = frontend
                 .restore_window_geometries
                 .remove(&surface_id)
@@ -1538,19 +1446,12 @@ pub(super) fn toggle_shell_maximize_focused_toplevel(state: &mut RuntimeState) -
         }
     };
 
-    clear_client_geometry_constraints(&window);
-    if let Some(toplevel) = window.toplevel() {
-        toplevel.with_pending_state(|pending| {
-            pending.states.unset(xdg_toplevel::State::Resizing);
-            pending.size = Some(target.size);
-        });
-        toplevel.send_pending_configure();
-    }
-    state
-        .wayland
-        .as_mut()
-        .expect("missing Wayland frontend")
-        .set_window_geometry_target(&window, target);
+    let authority = if matches!(action, WindowAction::Maximize) {
+        WindowGeometryAuthority::Shell
+    } else {
+        WindowGeometryAuthority::Pending
+    };
+    configure_shell_owned_geometry(state, &window, target, authority);
     if matches!(action, WindowAction::Restore) {
         state
             .wayland
@@ -1643,13 +1544,8 @@ pub(super) fn toggle_shell_vertical_maximize_focused_toplevel(state: &mut Runtim
     let Some(window) = focused_window(state) else {
         return false;
     };
-    let client_fullscreen = if let Some(toplevel) = window.toplevel() {
-        toplevel_has_state(toplevel, xdg_toplevel::State::Fullscreen)
-    } else if let Some(x11) = window.x11_surface() {
-        x11.is_fullscreen()
-    } else {
-        false
-    };
+    let client_fullscreen =
+        ManagedWindow::new(&window).is_some_and(|window| window.facts().client_state.fullscreen);
     let (target, restore) = {
         let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
         if client_fullscreen || frontend.window_geometry_locked(&window) {
@@ -1694,15 +1590,16 @@ pub(super) fn toggle_shell_vertical_maximize_focused_toplevel(state: &mut Runtim
     };
 
     clear_client_geometry_constraints(&window);
-    if let Some(toplevel) = window.toplevel() {
-        toplevel.with_pending_state(|pending| {
-            pending.states.unset(xdg_toplevel::State::Resizing);
-            pending.size = Some(target.size);
-        });
-        toplevel.send_pending_configure();
+    if let Some(window) = ManagedWindow::new(&window) {
+        window.prepare_shell_geometry(target);
     }
     let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-    frontend.set_window_geometry_target(&window, target);
+    let authority = if restore.is_some() {
+        WindowGeometryAuthority::Shell
+    } else {
+        WindowGeometryAuthority::Pending
+    };
+    frontend.set_window_geometry_target_with_authority(&window, target, authority);
     if let Some((surface_id, geometry)) = restore {
         frontend
             .shell_vertical_restore_geometries
@@ -1720,6 +1617,7 @@ pub(super) fn toggle_shell_vertical_maximize_focused_toplevel(state: &mut Runtim
     true
 }
 
+#[cfg(feature = "flutter")]
 pub(super) fn toggle_shell_fullscreen_focused_toplevel(state: &mut RuntimeState) -> bool {
     if let Some(window_id) = focused_local_window(state) {
         queue_local_window_action(state, window_id, WindowAction::ToggleFullscreen);
@@ -1729,265 +1627,123 @@ pub(super) fn toggle_shell_fullscreen_focused_toplevel(state: &mut RuntimeState)
         return false;
     };
 
-    let client_fullscreen = if let Some(toplevel) = window.toplevel() {
-        toplevel_has_state(toplevel, xdg_toplevel::State::Fullscreen)
-    } else if let Some(x11) = window.x11_surface() {
-        x11.is_fullscreen()
-    } else {
-        false
-    };
-
-    // SUPER+F is a shell-owned geometry toggle. Do not set the XDG fullscreen
-    // state here: doing so asks the client to enter its own fullscreen mode.
-    // Flutter tracks the restore frame and sends back a plain ConfigureWindow
-    // command with the output-sized (or restored) geometry.
-    let transition = {
+    // SUPER+F is compositor-owned. Rust resolves one physical output and
+    // applies the complete geometry before Flutter mirrors the state; the
+    // multi-output Flutter canvas is never a fullscreen target.
+    let (target, action, arrange_layout) = {
         let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-        let Some(transition) = frontend.toggle_shell_fullscreen_lock(&window, client_fullscreen)
-        else {
-            return true;
+        let Some(root) = frontend.window_root_surface(&window) else {
+            return false;
         };
-        transition
-    };
-    match transition {
-        super::ShellFullscreenTransition::Blocked => return true,
-        super::ShellFullscreenTransition::EnterShell => {
-            state
-                .wayland
-                .as_mut()
-                .expect("missing Wayland frontend")
-                .remember_window_placement(&window);
-        }
-        super::ShellFullscreenTransition::ExitShell => {
-            let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-            frontend.remember_window_placement(&window);
-            if let Some(root) = frontend.window_root_surface(&window) {
-                frontend
-                    .shell_fullscreen_restore_geometries
-                    .remove(&root.id());
+        let surface_id = root.id();
+        let presentation = frontend.managed_window_presentation(&window);
+        let current = bound_geometry_size(frontend.window_geometry_target(&window));
+        if presentation.fullscreen {
+            frontend.shell_fullscreen_locks.remove(&surface_id);
+            let target = frontend
+                .shell_fullscreen_restore_geometries
+                .remove(&surface_id)
+                .or_else(|| frontend.restore_window_geometries.remove(&surface_id))
+                .unwrap_or(current);
+            let arrange_layout = frontend.window_is_layout_managed(&window)
+                && !frontend
+                    .shell_maximize_restore_geometries
+                    .contains_key(&surface_id);
+            (
+                bound_geometry_size(target),
+                WindowAction::Restore,
+                arrange_layout,
+            )
+        } else {
+            if frontend.exact_window_geometry(&window).is_some() {
+                return true;
             }
-            frontend.arrange_layout_windows();
+            let assigned_output = frontend
+                .managed_layout_space(&window)
+                .map(|space| space.output);
+            let output_geometry = assigned_output
+                .and_then(|output| {
+                    frontend
+                        .outputs
+                        .iter()
+                        .find(|entry| entry.id == output)
+                        .map(|entry| entry.logical_geometry)
+                })
+                .or_else(|| {
+                    frontend
+                        .output_for_geometry(current)
+                        .map(|entry| entry.logical_geometry)
+                });
+            let Some(target) = output_geometry else {
+                return false;
+            };
+            frontend
+                .shell_fullscreen_restore_geometries
+                .insert(surface_id.clone(), current);
+            frontend.shell_fullscreen_locks.insert(surface_id);
+            (target, WindowAction::Fullscreen, false)
         }
-        super::ShellFullscreenTransition::ExitClient => {
-            exit_client_fullscreen_for_shell_shortcut(state, &window);
-            let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-            if let Some(root) = frontend.window_root_surface(&window) {
-                frontend
-                    .shell_fullscreen_restore_geometries
-                    .remove(&root.id());
-            }
-        }
-    }
-    queue_window_action_for_window(state, &window, WindowAction::ToggleFullscreen);
-    state.scene_sync.mark_dirty();
-    true
-}
-
-#[cfg(feature = "flutter")]
-fn exit_client_fullscreen_for_shell_shortcut(state: &mut RuntimeState, window: &Window) {
-    if let Some(toplevel) = window.toplevel().cloned() {
-        clear_toplevel_state(state, &toplevel, xdg_toplevel::State::Fullscreen);
-        return;
-    }
-
-    let Some(x11) = window.x11_surface().cloned() else {
-        return;
     };
-    if let Err(error) = x11.set_fullscreen(false) {
-        warn!(%error, window = x11.window_id(), "could not leave X11 fullscreen for SUPER+F");
+
+    if arrange_layout {
+        clear_client_geometry_constraints(&window);
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .arrange_layout_windows();
+    } else {
+        let authority = if matches!(action, WindowAction::Fullscreen) {
+            WindowGeometryAuthority::Shell
+        } else {
+            WindowGeometryAuthority::Pending
+        };
+        configure_shell_owned_geometry(state, &window, target, authority);
     }
-    super::xwayland::configure_x11_for_output(state, &x11, false, false);
     state
         .wayland
         .as_mut()
         .expect("missing Wayland frontend")
-        .arrange_layout_windows();
-}
-
-pub(super) fn configure_toplevel_for_output(
-    state: &mut RuntimeState,
-    surface: &ToplevelSurface,
-    requested_output: Option<&wl_output::WlOutput>,
-    xdg_state: xdg_toplevel::State,
-) -> bool {
-    if !surface.wl_surface().is_alive()
-        || (xdg_state != xdg_toplevel::State::Fullscreen
-            && xdg_state != xdg_toplevel::State::Maximized)
-    {
-        return false;
-    }
-    let window = state.wayland.as_ref().and_then(|frontend| {
-        frontend
-            .space
-            .elements()
-            .find(|window| {
-                window
-                    .toplevel()
-                    .is_some_and(|candidate| candidate.wl_surface() == surface.wl_surface())
-            })
-            .cloned()
-    });
-    let Some(window) = window else {
-        return false;
-    };
-    let was_constrained = toplevel_has_state(surface, xdg_toplevel::State::Fullscreen)
-        || toplevel_has_state(surface, xdg_toplevel::State::Maximized);
-    let (geometry, fullscreen_output) = {
-        let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
-        let requested = requested_output
-            .and_then(Output::from_resource)
-            .filter(|candidate| {
-                frontend
-                    .outputs
-                    .iter()
-                    .any(|entry| entry.output == *candidate)
-            });
-        let fullscreen_output = requested.as_ref().and_then(|_| requested_output.cloned());
-        let window_geometry = frontend.window_geometry_target(&window);
-        let output = requested.or_else(|| {
-            frontend
-                .output_for_geometry(window_geometry)
-                .map(|entry| entry.output.clone())
-        });
-        let Some(output) = output else {
-            return false;
-        };
-        let Some(geometry) = frontend.space.output_geometry(&output) else {
-            return false;
-        };
-        // Maximized clients get the shell work area; only true fullscreen
-        // covers the system bar.
-        let geometry = if xdg_state == xdg_toplevel::State::Maximized {
-            frontend.maximize_work_area(Some(&output), geometry)
-        } else {
-            geometry
-        };
-        (geometry, fullscreen_output)
-    };
-
-    let changed = surface.with_pending_state(|pending| {
-        let mut changed = pending.states.set(xdg_state);
-        changed |= pending.states.unset(xdg_toplevel::State::Resizing);
-        pending.size = Some(geometry.size);
-        if xdg_state == xdg_toplevel::State::Fullscreen {
-            changed |= pending.states.unset(xdg_toplevel::State::Maximized);
-            pending.fullscreen_output = fullscreen_output;
-        } else if xdg_state == xdg_toplevel::State::Maximized {
-            changed |= pending.states.unset(xdg_toplevel::State::Fullscreen);
-            pending.fullscreen_output = None;
-        }
-        changed
-    });
-    let restore_to_publish = {
-        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
-        let restore = if !was_constrained {
-            client_restore_geometry(
-                surface.is_initial_configure_sent(),
-                frontend.window_geometry_target(&window),
-            )
-            .inspect(|restore| {
-                frontend
-                    .restore_window_geometries
-                    .insert(surface.wl_surface().id(), *restore);
-            })
-        } else {
-            None
-        };
-        frontend.set_window_geometry_target(&window, geometry);
-        restore
-    };
-    #[cfg(feature = "flutter")]
-    if let Some(restore) = restore_to_publish {
-        queue_client_window_placement_for_monitor(
-            state,
-            &window,
-            restore,
-            geometry,
-            WindowPlacementPhase::End,
-            WindowPlacementChange::Resize,
-        );
-    }
-    #[cfg(not(feature = "flutter"))]
-    let _ = restore_to_publish;
-    if surface.is_initial_configure_sent() {
-        surface.send_configure();
-    }
+        .remember_window_placement(&window);
+    queue_window_action_for_window(state, &window, action);
     state.scene_sync.mark_dirty();
-    changed
+    true
 }
 
-pub(super) fn clear_toplevel_state(
+/// A protocol client request after XDG/Xwayland callback admission.
+///
+/// The optional output resource is meaningful only to XDG fullscreen's wire
+/// acknowledgement. Output selection, geometry ownership, layout interaction,
+/// and Flutter publication are otherwise identical for every managed window.
+pub(super) enum ManagedClientStateRequest {
+    Maximize,
+    Unmaximize,
+    Fullscreen(Option<wl_output::WlOutput>),
+    Unfullscreen,
+}
+
+/// Applies one client state request through Denial's managed-window path.
+///
+/// XDG state/configure serials and X11 EWMH setters remain terminal protocol
+/// handshakes. They do not own any shell policy beyond this function.
+pub(super) fn apply_managed_client_state_request(
     state: &mut RuntimeState,
-    surface: &ToplevelSurface,
-    xdg_state: xdg_toplevel::State,
+    window: &Window,
+    request: ManagedClientStateRequest,
 ) -> bool {
-    if !surface.wl_surface().is_alive()
-        || (xdg_state != xdg_toplevel::State::Fullscreen
-            && xdg_state != xdg_toplevel::State::Maximized)
+    #[cfg(feature = "flutter")]
+    if let Some(exact) = state
+        .wayland
+        .as_ref()
+        .and_then(|frontend| frontend.exact_window_geometry(window))
     {
-        return false;
+        configure_shell_owned_geometry(state, window, exact, WindowGeometryAuthority::Exact);
+        state.scene_sync.mark_dirty();
+        return true;
     }
-    let window = state.wayland.as_ref().and_then(|frontend| {
-        frontend
-            .space
-            .elements()
-            .find(|window| {
-                window
-                    .toplevel()
-                    .is_some_and(|candidate| candidate.wl_surface() == surface.wl_surface())
-            })
-            .cloned()
-    });
-    let (changed, unconstrained) = surface.with_pending_state(|pending| {
-        let changed = pending.states.unset(xdg_state);
-        if changed && xdg_state == xdg_toplevel::State::Fullscreen {
-            pending.fullscreen_output = None;
-        }
-        let unconstrained = !pending.states.contains(xdg_toplevel::State::Fullscreen)
-            && !pending.states.contains(xdg_toplevel::State::Maximized);
-        if changed && unconstrained {
-            pending.size = None;
-        }
-        (changed, unconstrained)
-    });
-    if changed && unconstrained {
-        let surface_id = surface.wl_surface().id();
-        let restore = state
-            .wayland
-            .as_mut()
-            .expect("missing Wayland frontend")
-            .restore_window_geometries
-            .remove(&surface_id)
-            .map(bound_geometry_size);
-        match (window.as_ref(), restore) {
-            (Some(window), Some(restore)) => {
-                surface.with_pending_state(|pending| pending.size = Some(restore.size));
-                state
-                    .wayland
-                    .as_mut()
-                    .expect("missing Wayland frontend")
-                    .set_window_geometry_target(window, restore);
-            }
-            (Some(window), None) => {
-                state
-                    .wayland
-                    .as_mut()
-                    .expect("missing Wayland frontend")
-                    .defer_client_sized_window_placement(window);
-            }
-            (None, _) => {
-                state
-                    .wayland
-                    .as_mut()
-                    .expect("missing Wayland frontend")
-                    .configured_window_geometries
-                    .remove(&surface_id);
-            }
-        }
-    }
-    if changed
-        && unconstrained
-        && let Some(window) = window.as_ref()
+
+    let entering_maximize = matches!(request, ManagedClientStateRequest::Maximize);
+    if entering_maximize
         && state
             .wayland
             .as_ref()
@@ -1999,32 +1755,335 @@ pub(super) fn clear_toplevel_state(
             .as_mut()
             .expect("missing Wayland frontend")
             .arrange_layout_windows();
+        state.scene_sync.mark_dirty();
+        return true;
     }
-    if surface.is_initial_configure_sent() {
-        surface.send_configure();
-    }
-    changed
-}
 
-pub(super) fn toplevel_has_state(
-    surface: &ToplevelSurface,
-    xdg_state: xdg_toplevel::State,
-) -> bool {
-    if !surface.wl_surface().is_alive() {
+    let Some(root) = state
+        .wayland
+        .as_ref()
+        .and_then(|frontend| frontend.window_root_surface(window))
+    else {
         return false;
+    };
+    state
+        .wayland
+        .as_mut()
+        .expect("missing Wayland frontend")
+        .mark_client_geometry_state_request(&root);
+
+    #[cfg(feature = "flutter")]
+    if state
+        .wayland
+        .as_ref()
+        .expect("missing Wayland frontend")
+        .window_shell_fullscreen_locked(window)
+    {
+        // Shell fullscreen is the geometry authority. Reject client attempts
+        // to replace it and reassert the one retained target for both protocols.
+        let target = state
+            .wayland
+            .as_ref()
+            .expect("missing Wayland frontend")
+            .window_geometry_target(window);
+        configure_shell_owned_geometry(state, window, target, WindowGeometryAuthority::Shell);
+        state.scene_sync.mark_dirty();
+        return true;
     }
-    with_states(surface.wl_surface(), |states| {
-        let Some(attributes) = states.data_map.get::<XdgToplevelSurfaceData>() else {
+
+    let Some(managed) = ManagedWindow::new(window) else {
+        return false;
+    };
+    let before = managed.facts().client_state;
+    let request_kind = match request {
+        ManagedClientStateRequest::Maximize => ClientStateRequestKind::Maximize,
+        ManagedClientStateRequest::Unmaximize => ClientStateRequestKind::Unmaximize,
+        ManagedClientStateRequest::Fullscreen(_) => ClientStateRequestKind::Fullscreen,
+        ManagedClientStateRequest::Unfullscreen => ClientStateRequestKind::Unfullscreen,
+    };
+    let entering = matches!(
+        request_kind,
+        ClientStateRequestKind::Maximize | ClientStateRequestKind::Fullscreen
+    );
+    let was_constrained = before.fullscreen || before.maximized;
+    let unconstrained_after = match request_kind {
+        ClientStateRequestKind::Unmaximize => !before.fullscreen,
+        ClientStateRequestKind::Unfullscreen => !before.maximized,
+        ClientStateRequestKind::Maximize | ClientStateRequestKind::Fullscreen => false,
+    };
+    let current = state
+        .wayland
+        .as_ref()
+        .expect("missing Wayland frontend")
+        .window_geometry_target(window);
+    let requested_output_resource = match &request {
+        ManagedClientStateRequest::Fullscreen(output) => output.as_ref(),
+        _ => None,
+    };
+    let (target, fullscreen_output) = if entering {
+        let frontend = state.wayland.as_ref().expect("missing Wayland frontend");
+        let requested_output = requested_output_resource
+            .and_then(Output::from_resource)
+            .filter(|candidate| {
+                frontend
+                    .outputs
+                    .iter()
+                    .any(|entry| entry.output == *candidate)
+            });
+        let fullscreen_output = requested_output
+            .as_ref()
+            .and_then(|_| requested_output_resource.cloned());
+        let output = requested_output
+            .or_else(|| {
+                frontend.managed_layout_space(window).and_then(|space| {
+                    frontend
+                        .outputs
+                        .iter()
+                        .find(|entry| entry.id == space.output)
+                        .map(|entry| entry.output.clone())
+                })
+            })
+            .or_else(|| {
+                frontend
+                    .output_for_geometry(current)
+                    .map(|entry| entry.output.clone())
+            });
+        let Some(output) = output else {
             return false;
         };
-        let attributes = attributes
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        attributes
-            .server_pending
-            .clone()
-            .unwrap_or_else(|| attributes.current_server_state())
-            .states
-            .contains(xdg_state)
-    })
+        let Some(monitor) = frontend.space.output_geometry(&output) else {
+            return false;
+        };
+        let target = if request_kind == ClientStateRequestKind::Maximize {
+            frontend.maximize_work_area(Some(&output), monitor)
+        } else {
+            monitor
+        };
+        (Some(target), fullscreen_output)
+    } else {
+        (None, None)
+    };
+
+    let root_id = root.id();
+    let restore_to_publish = if entering
+        && !was_constrained
+        && managed.can_store_client_restore()
+        && current.size.w > 0
+        && current.size.h > 0
+    {
+        let restore = bound_geometry_size(current);
+        let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+        match frontend.restore_window_geometries.entry(root_id.clone()) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(restore);
+                Some(restore)
+            }
+            std::collections::hash_map::Entry::Occupied(_) => None,
+        }
+    } else {
+        None
+    };
+    let restore = if !entering && unconstrained_after {
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .restore_window_geometries
+            .remove(&root_id)
+            .map(bound_geometry_size)
+    } else {
+        None
+    };
+    let target_size = target.or(restore).map(|geometry| geometry.size);
+    let changed =
+        managed.prepare_client_state_request(request_kind, target_size, fullscreen_output);
+
+    if !changed {
+        return false;
+    }
+    if let Some(target) = target {
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .set_window_geometry_target_with_authority(
+                window,
+                target,
+                WindowGeometryAuthority::ClientState,
+            );
+        #[cfg(feature = "flutter")]
+        if let Some(restore) = restore_to_publish {
+            queue_client_window_placement_for_monitor(
+                state,
+                window,
+                restore,
+                target,
+                WindowPlacementPhase::End,
+                WindowPlacementChange::Resize,
+            );
+        }
+    } else if unconstrained_after {
+        let layout_managed = state
+            .wayland
+            .as_ref()
+            .expect("missing Wayland frontend")
+            .window_is_layout_managed(window);
+        if layout_managed {
+            state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .arrange_layout_windows();
+        } else if let Some(restore) = restore {
+            state
+                .wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .set_window_geometry_target(window, restore);
+        } else {
+            let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
+            frontend.defer_client_sized_window_placement(window);
+            frontend.clear_window_geometry_intent(window);
+        }
+    }
+    #[cfg(feature = "flutter")]
+    {
+        let presentation = state
+            .wayland
+            .as_ref()
+            .expect("missing Wayland frontend")
+            .managed_window_presentation(window);
+        let action = if presentation.fullscreen {
+            WindowAction::Fullscreen
+        } else if presentation.maximized {
+            WindowAction::Maximize
+        } else {
+            WindowAction::Restore
+        };
+        queue_window_action_for_window(state, window, action);
+    }
+    state.scene_sync.mark_dirty();
+    true
+}
+
+/// Common admission gate for protocol-initiated move and resize grabs.
+pub(super) fn managed_client_grab_allowed(state: &RuntimeState, window: &Window) -> bool {
+    let Some(facts) = ManagedWindow::new(window).map(|window| window.facts()) else {
+        return false;
+    };
+    if facts.override_redirect
+        || facts.client_state.fullscreen
+        || facts.client_state.maximized
+        || state
+            .wayland
+            .as_ref()
+            .is_some_and(|frontend| frontend.window_is_layout_managed(window))
+    {
+        return false;
+    }
+    #[cfg(feature = "flutter")]
+    if state.wayland.as_ref().is_some_and(|frontend| {
+        frontend.window_shell_fullscreen_locked(window)
+            || frontend.exact_window_geometry(window).is_some()
+    }) {
+        return false;
+    }
+    true
+}
+
+#[cfg(feature = "flutter")]
+pub(super) fn apply_managed_minimize(
+    state: &mut RuntimeState,
+    window: &Window,
+    minimized: bool,
+) -> bool {
+    let Some(managed) = ManagedWindow::new(window) else {
+        return false;
+    };
+    let Some(root) = state
+        .wayland
+        .as_ref()
+        .and_then(|frontend| frontend.window_root_surface(window))
+    else {
+        return false;
+    };
+    managed.prepare_minimized(minimized);
+    state
+        .wayland
+        .as_mut()
+        .expect("missing Wayland frontend")
+        .set_surface_minimized(root.id(), minimized);
+    if minimized {
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .remove_window_from_layout(window, false);
+        release_window_focus(state, window);
+        queue_window_action_for_window(state, window, WindowAction::Minimize);
+    } else {
+        state
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .reconcile_window_layout(window);
+        queue_window_action_for_window(state, window, WindowAction::Restore);
+    }
+    state.scene_sync.mark_dirty();
+    true
+}
+
+#[cfg(all(test, feature = "flutter"))]
+mod tests {
+    use smithay::utils::{Logical, Point, Rectangle, Size};
+
+    use super::{authoritative_geometry_rejects_configure, configured_window_size};
+
+    fn rect(x: i32, y: i32, width: i32, height: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new(Point::from((x, y)), Size::from((width, height)))
+    }
+
+    #[test]
+    fn managed_layout_accepts_shell_fullscreen_geometry() {
+        let tile = rect(10, 10, 940, 1040);
+        let fullscreen = rect(0, 0, 1920, 1080);
+
+        assert!(authoritative_geometry_rejects_configure(
+            true, tile, fullscreen
+        ));
+        assert!(!authoritative_geometry_rejects_configure(true, tile, tile));
+        assert!(!authoritative_geometry_rejects_configure(
+            false, tile, fullscreen
+        ));
+    }
+
+    #[test]
+    fn shell_fullscreen_overrides_fixed_client_size_hints() {
+        let maximized = Size::<i32, Logical>::from((2542, 1397));
+        let fullscreen = Size::<i32, Logical>::from((2560, 1440));
+
+        assert_eq!(
+            configured_window_size(fullscreen, maximized, maximized, false),
+            maximized,
+        );
+        assert_eq!(
+            configured_window_size(fullscreen, maximized, maximized, true),
+            fullscreen,
+        );
+    }
+
+    #[test]
+    fn managed_layout_overrides_fixed_client_size_hints() {
+        let client_fixed = Size::<i32, Logical>::from((2280, 1397));
+        let tile = Size::<i32, Logical>::from((1265, 1397));
+
+        assert_eq!(
+            configured_window_size(tile, client_fixed, client_fixed, false),
+            client_fixed,
+        );
+        assert_eq!(
+            configured_window_size(tile, client_fixed, client_fixed, true),
+            tile,
+        );
+    }
 }

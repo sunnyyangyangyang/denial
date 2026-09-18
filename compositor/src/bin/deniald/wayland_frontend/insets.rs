@@ -147,10 +147,7 @@ impl WaylandFrontend {
         let Some(target) = self.mobile_window_geometry(window) else {
             return;
         };
-        let Some(root) = self.window_root_surface(window) else {
-            return;
-        };
-        if self.exact_window_geometries.get(&root.id()) == Some(&target) {
+        if self.exact_window_geometry(window) == Some(target) {
             return;
         }
         if let Some(toplevel) = window.toplevel() {
@@ -161,8 +158,11 @@ impl WaylandFrontend {
             });
             toplevel.send_pending_configure();
         }
-        self.exact_window_geometries.insert(root.id(), target);
-        self.set_window_geometry_target(window, target);
+        self.set_window_geometry_target_with_authority(
+            window,
+            target,
+            WindowGeometryAuthority::Exact,
+        );
     }
 
     pub(super) fn mobile_window_inset(&self, window: &Window) -> i32 {

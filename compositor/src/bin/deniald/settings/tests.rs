@@ -35,6 +35,9 @@ fn shell_document(value: Value) -> String {
         appearance
             .entry("allowClientCursorSurfaces")
             .or_insert(Value::Bool(true));
+        appearance
+            .entry("cursorSize")
+            .or_insert(Value::from(DEFAULT_CURSOR_SIZE));
     }
     let layout = document
         .entry("layout")
@@ -77,6 +80,7 @@ fn migrates_existing_shell_document_without_losing_sections() {
         "preferDark"
     );
     assert_eq!(document["appearance"]["allowClientCursorSurfaces"], true);
+    assert_eq!(document["appearance"]["cursorSize"], DEFAULT_CURSOR_SIZE);
     assert_eq!(document["layout"]["windowLayout"], "stacking");
     assert_eq!(document["layout"]["workspacesEnabled"], false);
     assert_eq!(document["layout"]["workspaceCount"], 4);
@@ -145,7 +149,8 @@ fn shell_update_preserves_native_keyboard_and_checks_revision() {
     let shell_update = shell_document(serde_json::json!({
         "appearance": {
             "colorSchemePreference": "preferLight",
-            "allowClientCursorSurfaces": false
+            "allowClientCursorSurfaces": false,
+            "cursorSize": 48
         },
         "applicationEnvironment": {
             "default": {"MOZ_ENABLE_WAYLAND": "1", "DISPLAY": null},
@@ -166,6 +171,7 @@ fn shell_update_preserves_native_keyboard_and_checks_revision() {
     assert_eq!(manager.keyboard(), &configured);
     assert_eq!(manager.mouse(), &configured_mouse);
     assert_eq!(manager.revision(), old_revision + 1);
+    assert_eq!(manager.cursor_size(), 48);
     let document: Value = serde_json::from_str(&manager.document_json().unwrap()).unwrap();
     assert_eq!(
         document["applicationEnvironment"]["default"]["MOZ_ENABLE_WAYLAND"],
@@ -268,6 +274,7 @@ fn touchpad_update_is_persistent_and_revisioned() {
         tap_to_click_enabled: false,
         natural_scroll_enabled: true,
         scroll_speed_factor: 2.5,
+        scrolling_layout_swipe_speed_factor: 1.75,
     };
     let old_revision = manager.revision();
     let update = manager
@@ -289,6 +296,22 @@ fn rejects_touchpad_scroll_speed_outside_supported_range() {
     for scroll_speed_factor in [0.049, 5.001, f64::NAN] {
         let configured = TouchpadSettings {
             scroll_speed_factor,
+            ..TouchpadSettings::default()
+        };
+        assert!(matches!(
+            manager.prepare_touchpad_update(manager.revision(), configured),
+            Err(SettingsError::Touchpad(_))
+        ));
+    }
+}
+
+#[test]
+fn rejects_touchpad_scrolling_layout_swipe_speed_outside_supported_range() {
+    let temporary = TemporaryDirectory::new("settings-touchpad-scrolling-layout-swipe-speed");
+    let manager = SettingsManager::load_path(temporary.settings_path()).unwrap();
+    for scrolling_layout_swipe_speed_factor in [0.249, 4.001, f64::NAN] {
+        let configured = TouchpadSettings {
+            scrolling_layout_swipe_speed_factor,
             ..TouchpadSettings::default()
         };
         assert!(matches!(

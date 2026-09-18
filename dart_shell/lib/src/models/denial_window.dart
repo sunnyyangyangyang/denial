@@ -1,7 +1,14 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
-enum DenialWindowContentKind { surfaceTree, localFlutter }
+enum DenialWindowContentKind {
+  surfaceTree,
+  localFlutter,
+  layerShellBackground,
+  layerShellBottom,
+  layerShellTop,
+  layerShellOverlay,
+}
 
 enum DenialSurfaceRole { root, subsurface, popup }
 
@@ -138,6 +145,8 @@ class DenialWindow {
     required this.monitorId,
     this.workspaceId = 1,
     this.minimized = false,
+    this.fullscreen = false,
+    this.maximized = false,
     required this.transform,
     required this.scale120,
     this.pinned = false,
@@ -179,6 +188,8 @@ class DenialWindow {
   final int monitorId;
   final int workspaceId;
   final bool minimized;
+  final bool fullscreen;
+  final bool maximized;
   final int transform;
   final int scale120;
   final bool pinned;
@@ -198,6 +209,15 @@ class DenialWindow {
   bool get isLocalFlutter =>
       contentKind == DenialWindowContentKind.localFlutter;
 
+  bool get isLayerShell => switch (contentKind) {
+    DenialWindowContentKind.layerShellBackground ||
+    DenialWindowContentKind.layerShellBottom ||
+    DenialWindowContentKind.layerShellTop ||
+    DenialWindowContentKind.layerShellOverlay => true,
+    DenialWindowContentKind.surfaceTree ||
+    DenialWindowContentKind.localFlutter => false,
+  };
+
   bool get isHome => appId == 'denia-home' || title == 'denia-home';
 
   bool get isSystemUi =>
@@ -207,7 +227,7 @@ class DenialWindow {
       appId == 'denia-systemui-input-method' ||
       title == 'denia-systemui-input-method';
 
-  bool get isUserApp => !isHome && !isSystemUi;
+  bool get isUserApp => !isLayerShell && !isHome && !isSystemUi;
 
   /// Whether this scene entry should play Denial's one-time window entrance.
   ///
@@ -339,6 +359,8 @@ class DenialWindow {
         other.monitorId == monitorId &&
         other.workspaceId == workspaceId &&
         other.minimized == minimized &&
+        other.fullscreen == fullscreen &&
+        other.maximized == maximized &&
         other.pinned == pinned &&
         other.suppressAnimations == suppressAnimations &&
         other.restoredAcrossFlutterRestart == restoredAcrossFlutterRestart &&
@@ -375,6 +397,8 @@ class DenialWindow {
         other.monitorId == monitorId &&
         other.workspaceId == workspaceId &&
         other.minimized == minimized &&
+        other.fullscreen == fullscreen &&
+        other.maximized == maximized &&
         other.transform == transform &&
         other.scale120 == scale120 &&
         other.pinned == pinned &&
@@ -424,6 +448,8 @@ class DenialWindow {
     monitorId,
     workspaceId,
     minimized,
+    fullscreen,
+    maximized,
     transform,
     scale120,
     pinned,

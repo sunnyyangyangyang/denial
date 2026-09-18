@@ -735,10 +735,11 @@ double _scaledControlRadius(double maximum, double scale) =>
     (maximum * scale).clamp(0.0, maximum).toDouble();
 
 class SettingsChoice<T> {
-  const SettingsChoice(this.value, this.label);
+  const SettingsChoice(this.value, this.label, {this.enabled = true});
 
   final T value;
   final String label;
+  final bool enabled;
 }
 
 class SettingsSelect<T> extends StatelessWidget {
@@ -807,6 +808,7 @@ class SettingsSelect<T> extends StatelessWidget {
                   for (final choice in choices)
                     DropdownMenuItem<T>(
                       value: choice.value,
+                      enabled: choice.enabled,
                       child: Text(
                         choice.label,
                         maxLines: 1,

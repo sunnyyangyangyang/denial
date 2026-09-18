@@ -23,7 +23,7 @@ use denial_core::portal_protocol::{DesktopColorSchemePreference, DesktopThemeSna
 
 use super::window_layout::WindowLayoutKind;
 
-pub(super) const SETTINGS_SCHEMA_VERSION: u64 = 25;
+pub(super) const SETTINGS_SCHEMA_VERSION: u64 = 27;
 pub(super) const MIN_WORKSPACE_COUNT: u8 = 2;
 pub(super) const MAX_WORKSPACE_COUNT: u8 = 9;
 pub(super) const DEFAULT_WORKSPACE_COUNT: u8 = 4;
@@ -44,9 +44,15 @@ const DEFAULT_REPEAT_RATE_HZ: u32 = 25;
 pub(super) const MIN_TOUCHPAD_SCROLL_SPEED_FACTOR: f64 = 0.05;
 pub(super) const MAX_TOUCHPAD_SCROLL_SPEED_FACTOR: f64 = 5.0;
 const DEFAULT_TOUCHPAD_SCROLL_SPEED_FACTOR: f64 = 1.0;
+pub(super) const MIN_TOUCHPAD_SCROLLING_LAYOUT_SWIPE_SPEED_FACTOR: f64 = 0.25;
+pub(super) const MAX_TOUCHPAD_SCROLLING_LAYOUT_SWIPE_SPEED_FACTOR: f64 = 4.0;
+const DEFAULT_TOUCHPAD_SCROLLING_LAYOUT_SWIPE_SPEED_FACTOR: f64 = 1.0;
 pub(super) const MIN_MOUSE_SPEED: f64 = -1.0;
 pub(super) const MAX_MOUSE_SPEED: f64 = 1.0;
 const DEFAULT_MOUSE_SPEED: f64 = 0.0;
+const MIN_CURSOR_SIZE: u32 = 16;
+pub(super) const DEFAULT_CURSOR_SIZE: u32 = 32;
+const MAX_CURSOR_SIZE: u32 = 64;
 static SETTINGS_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Environment overrides applied only to processes launched by Denial.
@@ -204,6 +210,15 @@ pub(super) fn load_application_environment() -> Result<ApplicationEnvironment, S
         return Ok(ApplicationEnvironment::default());
     };
     Ok(parse_document(&bytes)?.application_environment)
+}
+
+pub(super) fn load_cursor_size() -> Result<u32, SettingsError> {
+    let path = settings_path()?;
+    let Some(bytes) = read_settings_file(&path)? else {
+        return Ok(DEFAULT_CURSOR_SIZE);
+    };
+    let parsed = parse_document(&bytes)?;
+    parse_cursor_size(&parsed.document)
 }
 
 fn validate_environment_name(name: &str) -> Result<(), SettingsError> {
@@ -423,6 +438,7 @@ pub(super) struct TouchpadSettings {
     pub(super) tap_to_click_enabled: bool,
     pub(super) natural_scroll_enabled: bool,
     pub(super) scroll_speed_factor: f64,
+    pub(super) scrolling_layout_swipe_speed_factor: f64,
 }
 
 impl Default for TouchpadSettings {
@@ -431,6 +447,8 @@ impl Default for TouchpadSettings {
             tap_to_click_enabled: true,
             natural_scroll_enabled: false,
             scroll_speed_factor: DEFAULT_TOUCHPAD_SCROLL_SPEED_FACTOR,
+            scrolling_layout_swipe_speed_factor:
+                DEFAULT_TOUCHPAD_SCROLLING_LAYOUT_SWIPE_SPEED_FACTOR,
         }
     }
 }
@@ -443,6 +461,15 @@ impl TouchpadSettings {
         {
             return Err(SettingsError::Touchpad(format!(
                 "touchpad scroll speed factor must be within {MIN_TOUCHPAD_SCROLL_SPEED_FACTOR}..={MAX_TOUCHPAD_SCROLL_SPEED_FACTOR}"
+            )));
+        }
+        if !self.scrolling_layout_swipe_speed_factor.is_finite()
+            || !(MIN_TOUCHPAD_SCROLLING_LAYOUT_SWIPE_SPEED_FACTOR
+                ..=MAX_TOUCHPAD_SCROLLING_LAYOUT_SWIPE_SPEED_FACTOR)
+                .contains(&self.scrolling_layout_swipe_speed_factor)
+        {
+            return Err(SettingsError::Touchpad(format!(
+                "touchpad scrolling-layout swipe speed factor must be within {MIN_TOUCHPAD_SCROLLING_LAYOUT_SWIPE_SPEED_FACTOR}..={MAX_TOUCHPAD_SCROLLING_LAYOUT_SWIPE_SPEED_FACTOR}"
             )));
         }
         Ok(())
@@ -637,6 +664,10 @@ impl SettingsManager {
         self.allow_client_cursor_surfaces
     }
 
+    pub(super) fn cursor_size(&self) -> u32 {
+        parse_cursor_size(&self.document).unwrap_or(DEFAULT_CURSOR_SIZE)
+    }
+
     pub(super) fn window_layout_kind(&self) -> WindowLayoutKind {
         // Authoritative documents are validated before load/commit. Keep the
         // fallback defensive for the safe in-memory defaults used after an
@@ -710,6 +741,7 @@ impl SettingsManager {
         );
         let color_scheme_preference = parse_color_scheme_preference(&incoming)?;
         let allow_client_cursor_surfaces = parse_allow_client_cursor_surfaces(&incoming)?;
+        parse_cursor_size(&incoming)?;
         parse_window_layout_kind(&incoming)?;
         parse_workspace_settings(&incoming)?;
         self.prepare(
@@ -1038,6 +1070,16 @@ fn parse_document(bytes: &[u8]) -> Result<ParsedSettingsDocument, SettingsError>
         true
     };
     set_allow_client_cursor_surfaces(&mut document, allow_client_cursor_surfaces)?;
+    let had_cursor_size = document
+        .get("appearance")
+        .and_then(Value::as_object)
+        .is_some_and(|appearance| appearance.contains_key("cursorSize"));
+    let cursor_size = if had_cursor_size {
+        parse_cursor_size(&document)?
+    } else {
+        DEFAULT_CURSOR_SIZE
+    };
+    set_cursor_size(&mut document, cursor_size)?;
     let had_window_layout = document
         .get("layout")
         .and_then(Value::as_object)
@@ -1070,6 +1112,7 @@ fn parse_document(bytes: &[u8]) -> Result<ParsedSettingsDocument, SettingsError>
         || !had_application_environment
         || !had_color_scheme_preference
         || !had_allow_client_cursor_surfaces
+        || !had_cursor_size
         || !had_window_layout
         || !had_workspace_settings;
     document.insert("version".to_owned(), Value::from(SETTINGS_SCHEMA_VERSION));
@@ -1134,6 +1177,7 @@ fn default_document() -> (
         .expect("default appearance settings serialize");
     set_allow_client_cursor_surfaces(&mut document, allow_client_cursor_surfaces)
         .expect("default cursor surface setting serializes");
+    set_cursor_size(&mut document, DEFAULT_CURSOR_SIZE).expect("default cursor size serializes");
     set_window_layout_kind(&mut document, WindowLayoutKind::Stacking)
         .expect("default window layout setting serializes");
     set_workspace_settings(&mut document, WorkspaceSettings::default())
@@ -1224,6 +1268,43 @@ fn set_allow_client_cursor_surfaces(
             SettingsError::Document("settings appearance must be an object".to_owned())
         })?;
     appearance.insert("allowClientCursorSurfaces".to_owned(), Value::Bool(allowed));
+    Ok(())
+}
+
+fn parse_cursor_size(document: &Map<String, Value>) -> Result<u32, SettingsError> {
+    let value = document
+        .get("appearance")
+        .and_then(Value::as_object)
+        .and_then(|appearance| appearance.get("cursorSize"))
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| {
+            SettingsError::Document(
+                "appearance.cursorSize is missing or is not a finite number".to_owned(),
+            )
+        })?;
+    if !(f64::from(MIN_CURSOR_SIZE)..=f64::from(MAX_CURSOR_SIZE)).contains(&value) {
+        return Err(SettingsError::Document(format!(
+            "appearance.cursorSize must be between {MIN_CURSOR_SIZE} and {MAX_CURSOR_SIZE}"
+        )));
+    }
+    Ok(value.round() as u32)
+}
+
+fn set_cursor_size(
+    document: &mut Map<String, Value>,
+    cursor_size: u32,
+) -> Result<(), SettingsError> {
+    if !document.contains_key("appearance") {
+        document.insert("appearance".to_owned(), Value::Object(Map::new()));
+    }
+    let appearance = document
+        .get_mut("appearance")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            SettingsError::Document("settings appearance must be an object".to_owned())
+        })?;
+    appearance.insert("cursorSize".to_owned(), Value::from(cursor_size));
     Ok(())
 }
 

@@ -278,6 +278,7 @@ List<Widget> _buildDesktopWindowLayers({
   required bool reduceMotion,
   required DisplayLayout? displayLayout,
   required double devicePixelRatio,
+  required DesktopWindowRevealMountRegistry windowRevealRegistry,
   required ValueChanged<DenialWindow> onActivateWindow,
   required ValueChanged<DenialWindow> onCloseWindow,
   required ValueChanged<DenialWindow> onBeginOverviewDrag,
@@ -386,7 +387,11 @@ List<Widget> _buildDesktopWindowLayers({
         : Motion.overviewClose;
     final active = switching
         ? DesktopWindowSwitcherLayout.isSelected(switcher, placement.objectId)
-        : !overview && !placement.minimized && placement.z == topZ;
+        : overview
+        ? desktop.overview?.selectedObjectId == placement.objectId
+        : !placement.minimized && placement.z == topZ;
+    final selected =
+        overview && desktop.overview?.selectedObjectId == placement.objectId;
     layers.add(
       _DesktopWindowFrame(
         key: ValueKey<int>(placement.objectId),
@@ -405,6 +410,8 @@ List<Widget> _buildDesktopWindowLayers({
         switching: switching,
         motionDuration: motionDuration,
         active: active,
+        selected: selected,
+        windowRevealRegistry: windowRevealRegistry,
         onOverviewTap: () => onActivateWindow(window),
         onOverviewClose: () => onCloseWindow(window),
         onOverviewDragStart: () => onBeginOverviewDrag(window),
@@ -437,6 +444,7 @@ class _DesktopScene extends ConsumerStatefulWidget {
   const _DesktopScene({
     required this.viewSize,
     required this.windows,
+    required this.layerSurfaces,
     required this.desktop,
     required this.closeEffect,
     required this.minimizedWindowPlacement,
@@ -474,6 +482,7 @@ class _DesktopScene extends ConsumerStatefulWidget {
 
   final Size viewSize;
   final List<DenialWindow> windows;
+  final List<DenialWindow> layerSurfaces;
   final DesktopWorkspaceState desktop;
   final DesktopWindowCloseEffect closeEffect;
   final MinimizedWindowPlacement minimizedWindowPlacement;
@@ -516,6 +525,8 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
   final Map<int, _ClosingDesktopWindow> _closingWindows =
       <int, _ClosingDesktopWindow>{};
   final Map<int, Rect> _minimizedPlacementExitFrames = <int, Rect>{};
+  final DesktopWindowRevealMountRegistry _windowRevealRegistry =
+      DesktopWindowRevealMountRegistry();
   late final DesktopMinimizeLayerHandoffController _minimizeLayerHandoff;
   late final DesktopMinimizedPlacementTransitionController
   _minimizedPlacementTransition;
@@ -603,6 +614,7 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
     final activeObjectIds = <int>{
       for (final window in widget.windows) window.objectId,
     };
+    _windowRevealRegistry.retainOnly(activeObjectIds);
     _minimizeLayerHandoff.retainOnly(activeObjectIds);
     final animateMinimize = !MediaQuery.disableAnimationsOf(context);
     for (final placement in widget.desktop.placements.values) {
@@ -687,6 +699,20 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
         continue;
       }
       final closeId = _nextCloseId++;
+      final outputClip = desktopScrollingOutputClip(
+        windowLayout: ref.read(shellSettingsProvider).layout.windowLayout,
+        pinned: window.pinned,
+        transformed:
+            oldWidget.desktop.isInOverview(window.objectId) ||
+            DesktopWindowSwitcherLayout.contains(
+              oldWidget.windowSwitcher,
+              window.objectId,
+            ),
+        outputRect: desktopOutputPixelGridForMonitor(
+          oldWidget.displayLayout,
+          placement.monitorId,
+        )?.logicalRect,
+      );
       _closingWindows[closeId] = _ClosingDesktopWindow(
         id: closeId,
         window: window,
@@ -695,6 +721,7 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
             placement.fullscreen &&
             !oldWidget.desktop.isInOverview(window.objectId),
         effect: widget.closeEffect,
+        outputClip: outputClip,
       );
     }
   }
@@ -763,6 +790,7 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
   Widget build(BuildContext context) {
     final viewSize = widget.viewSize;
     final windows = widget.windows;
+    final layerSurfaces = widget.layerSurfaces;
     final desktop = widget.desktop;
     final windowSwitcher = widget.windowSwitcher;
     final displayLayout = widget.displayLayout;
@@ -863,6 +891,15 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
       fit: StackFit.expand,
       children: [
         const ShellWallpaper(),
+        for (final surface in layerSurfaces)
+          if (surface.contentKind ==
+                  DenialWindowContentKind.layerShellBackground ||
+              surface.contentKind == DenialWindowContentKind.layerShellBottom)
+            _DesktopLayerShellSurface(
+              key: ValueKey<String>('layer-shell-${surface.surfaceId}'),
+              surface: surface,
+              displayLayout: displayLayout,
+            ),
         Positioned.fill(
           child: IgnorePointer(
             ignoring: wallpaperSelectorVisible,
@@ -894,6 +931,7 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
                     reduceMotion: reduceMotion,
                     displayLayout: displayLayout,
                     devicePixelRatio: devicePixelRatio,
+                    windowRevealRegistry: _windowRevealRegistry,
                     onActivateWindow: onActivateWindow,
                     onCloseWindow: onCloseWindow,
                     onBeginOverviewDrag: onBeginOverviewDrag,
@@ -951,6 +989,7 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
                     reduceMotion: reduceMotion,
                     displayLayout: displayLayout,
                     devicePixelRatio: devicePixelRatio,
+                    windowRevealRegistry: _windowRevealRegistry,
                     onActivateWindow: onActivateWindow,
                     onCloseWindow: onCloseWindow,
                     onBeginOverviewDrag: onBeginOverviewDrag,
@@ -1041,6 +1080,14 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
             ),
           ),
         ),
+        for (final surface in layerSurfaces)
+          if (surface.contentKind == DenialWindowContentKind.layerShellTop ||
+              surface.contentKind == DenialWindowContentKind.layerShellOverlay)
+            _DesktopLayerShellSurface(
+              key: ValueKey<String>('layer-shell-${surface.surfaceId}'),
+              surface: surface,
+              displayLayout: displayLayout,
+            ),
         const ClipboardTrayLayer(),
         Positioned.fill(
           child: ShellInputRegion(

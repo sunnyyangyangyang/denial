@@ -635,6 +635,8 @@ fn decode_settings_request(
                     tap_to_click_enabled: touchpad.tap_to_click_enabled(),
                     natural_scroll_enabled: touchpad.natural_scroll_enabled(),
                     scroll_speed_factor: touchpad.scroll_speed_factor(),
+                    scrolling_layout_swipe_speed_factor: touchpad
+                        .scrolling_layout_swipe_speed_factor(),
                 },
             })
         }

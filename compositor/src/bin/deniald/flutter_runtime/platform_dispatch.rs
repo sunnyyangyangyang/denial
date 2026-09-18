@@ -35,6 +35,9 @@ impl FlutterRuntime {
         warn!(
             count = retired.lease_count,
             timeout_ms = WINDOW_CLOSE_LEASE_TIMEOUT.as_millis(),
+            first_window_id = ?retired.first_window_id,
+            first_window_republished = retired.first_window_republished,
+            texture_count = retired.texture_ids.len(),
             "released window close-frame leases after Flutter acknowledgement timeout"
         );
         self.retire_window_close_textures(retired.texture_ids)

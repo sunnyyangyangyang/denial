@@ -26,6 +26,9 @@ const settingsAccentColorTriggerKey = ValueKey<String>(
 const settingsColorSchemeControlKey = ValueKey<String>(
   'settings-color-scheme-control',
 );
+const settingsFontFamilyControlKey = ValueKey<String>(
+  'settings-font-family-control',
+);
 const settingsBackdropBlurToggleKey = ValueKey<String>(
   'settings-backdrop-blur-toggle',
 );
@@ -54,6 +57,9 @@ class SettingsAppearancePage extends StatelessWidget {
     required this.onColorSchemePreferenceChanged,
     required this.onAccentSourceChanged,
     required this.onOpenAccentPicker,
+    required this.fontFamilies,
+    required this.fontCatalogLoading,
+    required this.onFontFamilyChanged,
     required this.onCornerRadiusScaleChanged,
     required this.onPanelOpacityChanged,
     required this.onCardOpacityChanged,
@@ -83,6 +89,9 @@ class SettingsAppearancePage extends StatelessWidget {
   onColorSchemePreferenceChanged;
   final ValueChanged<ShellAccentSource> onAccentSourceChanged;
   final VoidCallback onOpenAccentPicker;
+  final List<String> fontFamilies;
+  final bool fontCatalogLoading;
+  final ValueChanged<String> onFontFamilyChanged;
   final ValueChanged<double> onCornerRadiusScaleChanged;
   final ValueChanged<double> onPanelOpacityChanged;
   final ValueChanged<double> onCardOpacityChanged;
@@ -199,6 +208,26 @@ class SettingsAppearancePage extends StatelessWidget {
                   ),
                 ],
                 onChanged: onAccentSourceChanged,
+              ),
+            ),
+            SettingsSection(
+              title: l10n.settingsTypographyTitle,
+              child: SettingsSelect<String>(
+                key: settingsFontFamilyControlKey,
+                label: l10n.settingsFontFamily,
+                description: fontCatalogLoading
+                    ? l10n.settingsFontCatalogLoading
+                    : l10n.settingsFontDescription,
+                value: settings.fontFamily,
+                choices: <SettingsChoice<String>>[
+                  SettingsChoice('', l10n.settingsFontSystemDefault),
+                  for (final family in _fontFamilyChoices(
+                    fontFamilies,
+                    settings.fontFamily,
+                  ))
+                    SettingsChoice(family, _fontFamilyLabel(family)),
+                ],
+                onChanged: onFontFamilyChanged,
               ),
             ),
             SettingsSection(
@@ -383,6 +412,25 @@ class SettingsAppearancePage extends StatelessWidget {
       ],
     );
   }
+}
+
+List<String> _fontFamilyChoices(
+  List<String> availableFamilies,
+  String selectedFamily,
+) {
+  if (selectedFamily.isEmpty || availableFamilies.contains(selectedFamily)) {
+    return availableFamilies;
+  }
+  final choices = <String>[...availableFamilies, selectedFamily];
+  choices.sort((first, second) {
+    final folded = first.toLowerCase().compareTo(second.toLowerCase());
+    return folded != 0 ? folded : first.compareTo(second);
+  });
+  return choices;
+}
+
+String _fontFamilyLabel(String family) {
+  return family == ShellText.systemBarFontFamily ? 'JetBrains Mono' : family;
 }
 
 class _CursorSettings extends StatefulWidget {

@@ -129,7 +129,13 @@ class NotificationArtwork extends ConsumerWidget {
     final imagePath = _localImagePath(notification.imagePath);
     Widget content;
     if (preferContentImage && image != null) {
-      content = _RawNotificationImage(image: image);
+      content = Stack(
+        fit: StackFit.expand,
+        children: [
+          NotificationAppIcon(notification: notification),
+          _RawNotificationImage(image: image),
+        ],
+      );
     } else if (preferContentImage && imagePath != null) {
       final cacheSize = (size * MediaQuery.devicePixelRatioOf(context))
           .ceil()
@@ -152,12 +158,14 @@ class NotificationArtwork extends ConsumerWidget {
       content = NotificationAppIcon(notification: notification);
     }
 
-    return RepaintBoundary(
-      child: SizedBox.square(
-        dimension: size,
-        child: ClipRRect(
-          borderRadius: context.shellTheme.borderRadius(size * 0.24),
-          child: content,
+    return ExcludeSemantics(
+      child: RepaintBoundary(
+        child: SizedBox.square(
+          dimension: size,
+          child: ClipRRect(
+            borderRadius: context.shellTheme.borderRadius(size * 0.24),
+            child: content,
+          ),
         ),
       ),
     );

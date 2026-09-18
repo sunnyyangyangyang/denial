@@ -1311,6 +1311,30 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsAutomaticIdleTitle => '自动空闲操作';
 
   @override
+  String get settingsPowerButtonTitle => '电源按钮';
+
+  @override
+  String get settingsPowerButtonAction => '操作';
+
+  @override
+  String get settingsPowerButtonDescription => '选择按下实体电源按钮时执行的操作。';
+
+  @override
+  String get settingsPowerButtonSuspend => '挂起';
+
+  @override
+  String get settingsPowerButtonHibernate => '休眠';
+
+  @override
+  String get settingsPowerButtonHibernateUnavailable => '休眠（不可用）';
+
+  @override
+  String get settingsPowerButtonDpms => '关闭显示器（DPMS）';
+
+  @override
+  String get settingsPowerButtonPowerOff => '关机';
+
+  @override
   String get settingsAutomaticLockToggle => '自动锁定';
 
   @override
@@ -1539,6 +1563,9 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsTransparencyTitle => '透明材质';
+
+  @override
+  String get settingsTypographyTitle => '字体';
 
   @override
   String get settingsTransparencyOff => '关闭';
@@ -1889,6 +1916,18 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsFocusedWindows => '聚焦窗口';
 
   @override
+  String get settingsFontCatalogLoading => '正在查找已安装的字体…';
+
+  @override
+  String get settingsFontDescription => '在整个 Denial Shell 中使用系统默认字体或已安装的字体。';
+
+  @override
+  String get settingsFontFamily => '字体系列';
+
+  @override
+  String get settingsFontSystemDefault => '系统默认';
+
+  @override
   String get settingsFocusedWindowBorder => '高亮聚焦窗口边框';
 
   @override
@@ -2041,6 +2080,9 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsTouchpadScrollSpeed => '手指滚动速度';
+
+  @override
+  String get settingsTouchpadScrollingLayoutSwipeSpeed => '滚动布局滑动速度';
 
   @override
   String get settingsMousePointerSpeed => '鼠标指针速度';
@@ -2388,7 +2430,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsWindowLayoutDescription =>
-      '堆叠允许窗口相互重叠。平铺动态划分桌面。滚动平铺将全高窗口列排列成跟随焦点的水平长带。';
+      '堆叠允许窗口相互重叠。平铺动态划分桌面。滚动平铺将窗口排列成跟随焦点的长带；显示器旋转 90° 或 270° 时，长带会改为纵向。';
 
   @override
   String get settingsWindowLayoutDwindle => '平铺';

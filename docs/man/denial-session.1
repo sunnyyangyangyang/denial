@@ -43,11 +43,18 @@ All other arguments are forwarded to
 Root-owned shell-compatible machine configuration. Supported overrides include
 .BR DENIAL_DRM_DEVICE ,
 .BR DENIAL_RENDER_DEVICE ,
-.BR DENIA_SHELL_PROFILE ,
-.BR DENIA_FLUTTER_RENDERER ,
+.BR DENIAL_SHELL_PROFILE ,
+.BR DENIAL_FLUTTER_RENDERER ,
+.BR LIBGL_ALWAYS_SOFTWARE ,
 .BR QT_QPA_PLATFORMTHEME ,
 and
 .BR DENIAL_FLUTTER_BUNDLE .
+.PP
+The former
+.B DENIA_*
+spellings remain compatibility aliases. A
+.B DENIAL_*
+value takes precedence when both forms are present.
 .PP
 Unless explicitly overridden, the launcher selects Qt's
 .B xdgdesktopportal
@@ -55,6 +62,17 @@ platform theme provider so Qt applications receive Denial's colour-scheme
 preference from the Settings portal. Assigning an empty
 .B QT_QPA_PLATFORMTHEME
 value restores Qt's toolkit default.
+.PP
+When the effective render device uses the VMware
+.B vmwgfx
+kernel driver and
+.B LIBGL_ALWAYS_SOFTWARE
+is unset, the launcher automatically selects Denial's Mesa software-rendering
+compatibility path. An explicit value takes precedence; use 0 to retry VMware
+acceleration for diagnostics or 1 to force software rendering on another
+driver. The
+.B --check
+output reports the detected render driver and effective Mesa policy.
 .TP
 .I /etc/denial/outputs.conf
 System output template copied to a user's configuration on first launch.

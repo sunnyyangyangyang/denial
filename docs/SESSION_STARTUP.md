@@ -171,6 +171,15 @@ This avoids showing the desktop on wake or flashing the lock UI before power-off
 Native and Flutter bundles must both support this handshake; a missing or stale
 acknowledgement keeps a locked display off rather than presenting old content.
 
+Denial also holds a logind-compatible `sleep` delay inhibitor and observes
+`PrepareForSleep` for system suspend and hibernation. Before releasing that
+inhibitor, the native authentication gate closes and every output which was on
+is cleared through DRM DPMS. After resume, only those outputs are restored, and
+the same lock-frame handshake keeps KMS off until Flutter has produced a fresh
+lock frame. This covers sleep requested by Denial, logind idle policy, lid
+switches, and external logind clients without flashing the lock screen before
+the display goes black.
+
 ## Fingerprint unlock
 
 When fprintd is installed and the session user already has a fingerprint
@@ -237,12 +246,16 @@ Skia/Ganesh compatibility path can select it persistently in
 `/etc/denial/session.conf`:
 
 ```sh
-DENIA_FLUTTER_RENDERER=skia
+DENIAL_FLUTTER_RENDERER=skia
 ```
 
 For a controlled one-shot session, pass `--flutter-renderer skia` through the
 launcher instead. Renderer changes take effect when the Flutter engine starts,
 so restart the Denial session after changing the machine override.
+
+Denial environment variables use the `DENIAL_*` prefix. The former `DENIA_*`
+spellings remain compatibility aliases during the transition; when both forms
+are present, the `DENIAL_*` value takes precedence.
 
 Machines whose display controller and GPU are exposed as different DRM nodes
 can select the render node independently in `/etc/denial/session.conf`:
@@ -255,6 +268,20 @@ DENIAL_RENDER_DEVICE=/dev/dri/renderD128
 Denial keeps KMS and scanout on `DENIAL_DRM_DEVICE`; GBM allocation, EGL, and
 Flutter rendering use `DENIAL_RENDER_DEVICE`. When the render override is
 unset, both paths continue to use the KMS device.
+
+When the effective render device uses the VMware `vmwgfx` kernel driver, the
+installed launcher automatically passes `--software-rendering`. Mesa then uses
+its KMS software rasterizer for GBM/EGL while `vmwgfx` continues to own KMS
+scanout. This compatibility path avoids depending on VMware's accelerated EGL
+display, which can be unavailable even when the virtual display has working
+modesetting. `denial-session --check` reports the detected kernel driver and
+the selected Mesa policy.
+
+An explicitly inherited `LIBGL_ALWAYS_SOFTWARE` value or an assignment in
+`/etc/denial/session.conf` takes precedence over that automatic choice. Set it
+to `0` to retry VMware acceleration for diagnostics, or to `1` to force Mesa
+software rendering on another driver. Direct `deniald` diagnostics can request
+the same software path with `--software-rendering`.
 
 ## Xwayland scaling compatibility
 
@@ -277,7 +304,7 @@ restart is required because the mode is selected when Xwayland starts.
 | Invocation | Result |
 | --- | --- |
 | `denial-session` | Start the packaged desktop after an authenticated display-manager login |
-| `denial-session --check` | Validate the installation, discovered session lifecycle, bundle, output configuration, DRM selection, Qt platform theme, and Xwayland without starting a compositor |
+| `denial-session --check` | Validate the installation, discovered session lifecycle, bundle, output configuration, DRM and Mesa renderer selection, Qt platform theme, and Xwayland without starting a compositor |
 | `denial-session --start-locked` | Start with Denial's native security gate and Flutter lock screen already locked |
 
 `denial-session` forwards other arguments to `deniald`. Those lower-level
