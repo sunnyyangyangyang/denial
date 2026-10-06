@@ -28,6 +28,7 @@ class Motion {
   static const Duration desktopPanelFadeClose = Duration(milliseconds: 150);
   static const Duration homeFlyAway = Duration(milliseconds: 280);
   static const Duration tile = Duration(milliseconds: 160);
+  static const Duration layoutTileReflow = Duration(milliseconds: 200);
   static const Duration inputMethodPopup = Duration(milliseconds: 180);
   static const Duration pill = Duration(milliseconds: 90);
   static const Duration cardSettle = Duration(milliseconds: 220);
@@ -87,6 +88,12 @@ class Motion {
   /// A modest non-zero initial slope avoids a perceptible stop at the reversal
   /// point, while the zero terminal slope still settles cleanly.
   static const Curve overviewReversalCurve = Cubic(0.4, 0.2, 0.2, 1.0);
+
+  /// A restrained one-shot overshoot for siblings displaced by a managed
+  /// layout drop preview. It reaches the destination quickly, travels about
+  /// 1.4% beyond it, and settles without the repeated oscillation of an
+  /// elastic curve.
+  static const Curve layoutTileReflowCurve = Cubic(0.18, 0.82, 0.24, 1.08);
 
   // Springs (tuned for normalised [0,1] controllers) -------------------------
   // Damping is kept at / just below critical so motion is lively but does not

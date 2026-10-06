@@ -15,6 +15,19 @@ impl WireBridge {
         validate_topology(snapshot, atlas)?;
         self.snapshot = snapshot.clone();
         self.atlas = atlas.clone();
+        let live_monitors = self
+            .snapshot
+            .outputs
+            .iter()
+            .map(|output| {
+                monitor_id(output.id).ok_or(WireError::Topology("monitor id exceeds i64"))
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        self.active_workspaces
+            .retain(|monitor_id, _| live_monitors.contains(monitor_id));
+        for monitor_id in live_monitors {
+            self.active_workspaces.entry(monitor_id).or_insert(1);
+        }
         let sequence = self.take_sequence();
         self.outbound_builder.reset();
         encode_display_layout(
@@ -24,6 +37,64 @@ impl WireBridge {
             &self.snapshot,
             &self.atlas,
             &self.work_area,
+            &self.active_workspaces,
+        )?;
+        Ok(self.outbound_builder.finished_data())
+    }
+
+    /// Replaces the monitor-local workspace snapshot without emitting an
+    /// event. Replacement Flutter runtimes install this before they process
+    /// their first display-layout request.
+    pub fn set_active_workspaces(
+        &mut self,
+        workspaces: impl IntoIterator<Item = (i64, u8)>,
+    ) -> Result<(), WireError> {
+        let live_monitors = self
+            .snapshot
+            .outputs
+            .iter()
+            .map(|output| {
+                monitor_id(output.id).ok_or(WireError::Topology("monitor id exceeds i64"))
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let mut next = BTreeMap::new();
+        for (monitor_id, workspace_id) in workspaces {
+            if !live_monitors.contains(&monitor_id)
+                || !(1..=9).contains(&workspace_id)
+                || next.insert(monitor_id, workspace_id).is_some()
+            {
+                return Err(WireError::Topology("invalid active workspace snapshot"));
+            }
+        }
+        for monitor_id in live_monitors {
+            next.entry(monitor_id).or_insert(1);
+        }
+        self.active_workspaces = next;
+        Ok(())
+    }
+
+    /// Updates one workspace and emits the complete display-layout snapshot.
+    /// Workspace ownership is state, while the following ShellAction remains
+    /// only the transition/animation notification.
+    pub fn update_active_workspace(
+        &mut self,
+        monitor_id: i64,
+        workspace_id: u8,
+    ) -> Result<&[u8], WireError> {
+        if !(1..=9).contains(&workspace_id) || !self.active_workspaces.contains_key(&monitor_id) {
+            return Err(WireError::Topology("workspace output is not live"));
+        }
+        self.active_workspaces.insert(monitor_id, workspace_id);
+        let sequence = self.take_sequence();
+        self.outbound_builder.reset();
+        encode_display_layout(
+            &mut self.outbound_builder,
+            sequence,
+            0,
+            &self.snapshot,
+            &self.atlas,
+            &self.work_area,
+            &self.active_workspaces,
         )?;
         Ok(self.outbound_builder.finished_data())
     }
@@ -537,6 +608,7 @@ fn create_window_snapshot<'a>(
                 geometry_height: description.geometry_height,
                 monitor_id: description.monitor_id,
                 workspace_id: description.workspace_id,
+                transient_parent_id: description.transient_parent_id,
                 minimized: description.minimized,
                 fullscreen: description.fullscreen,
                 maximized: description.maximized,
@@ -1383,6 +1455,7 @@ pub(super) fn encode_display_layout(
     snapshot: &TopologySnapshot,
     atlas: &AtlasPlan,
     work_area: &WorkAreaOptions,
+    active_workspaces: &BTreeMap<i64, u8>,
 ) -> Result<(), WireError> {
     let mut ordered = snapshot.outputs.iter().collect::<Vec<_>>();
     ordered.sort_by(|left, right| {
@@ -1417,17 +1490,21 @@ pub(super) fn encode_display_layout(
             f64::from(planned.source_rect.width),
             f64::from(planned.source_rect.height),
         );
+        let monitor_id =
+            monitor_id(output.id).ok_or(WireError::Topology("monitor id exceeds i64"))?;
         outputs.push(fb::DisplayOutput::create(
             builder,
             &fb::DisplayOutputArgs {
-                monitor_id: monitor_id(output.id)
-                    .ok_or(WireError::Topology("monitor id exceeds i64"))?,
+                monitor_id,
                 name: Some(name),
                 logical_rect: Some(&logical),
                 pixel_size: Some(&pixels),
                 source_rect: Some(&source),
                 scale: f64::from(output.scale_120) / f64::from(SCALE_BASE),
                 refresh_rate: f64::from(output.refresh_millihz) / 1_000.0,
+                active_workspace: u32::from(
+                    active_workspaces.get(&monitor_id).copied().unwrap_or(1),
+                ),
             },
         ));
     }

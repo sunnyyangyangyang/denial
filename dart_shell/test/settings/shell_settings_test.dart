@@ -26,6 +26,11 @@ void main() {
     expect(settings.layout.systemBarOutputNames, isEmpty);
     expect(settings.layout.systemBarThickness, 33);
     expect(settings.layout.maximizePadding, 8);
+    expect(settings.layout.scrollingLayoutWheelSpeed, 1);
+    expect(
+      settings.layout.scrollingLayoutWheelUpDirection,
+      ScrollingLayoutWheelUpDirection.left,
+    );
     expect(
       settings.layout.minimizedWindowPlacement,
       MinimizedWindowPlacement.offscreen,
@@ -259,6 +264,41 @@ void main() {
         'workspaceSwitchingOrientation': 'vertical',
       },
     });
+  });
+
+  test('scrolling layout wheel settings persist and produce a typed patch', () {
+    const previous = ShellSettings();
+    final next = previous.copyWith(
+      layout: previous.layout.copyWith(
+        scrollingLayoutWheelSpeed: 2.25,
+        scrollingLayoutWheelUpDirection: ScrollingLayoutWheelUpDirection.right,
+      ),
+    );
+
+    final restored = ShellSettings.fromJson(next.toJson());
+    expect(restored.layout.scrollingLayoutWheelSpeed, 2.25);
+    expect(
+      restored.layout.scrollingLayoutWheelUpDirection,
+      ScrollingLayoutWheelUpDirection.right,
+    );
+    expect(next.differenceFrom(previous), <String, Object?>{
+      'layout': <String, Object?>{
+        'scrollingLayoutWheelSpeed': 2.25,
+        'scrollingLayoutWheelUpDirection': 'right',
+      },
+    });
+
+    final bounded = ShellSettings.fromJson(<String, Object?>{
+      'layout': <String, Object?>{
+        'scrollingLayoutWheelSpeed': 4.001,
+        'scrollingLayoutWheelUpDirection': 'future',
+      },
+    });
+    expect(bounded.layout.scrollingLayoutWheelSpeed, 4);
+    expect(
+      bounded.layout.scrollingLayoutWheelUpDirection,
+      ScrollingLayoutWheelUpDirection.left,
+    );
   });
 
   test('minimized window placement persists and produces a typed patch', () {

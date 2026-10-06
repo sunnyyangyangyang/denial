@@ -274,6 +274,12 @@ the Settings process to the shell render tree. For schema 10,
 private `denial-portal` snapshot channel; an optimistic Settings preview never
 changes the application portal preference.
 
+`deniald` also watches `settings.json` for direct editor saves. A valid external
+document is normalized to the next authoritative revision and enters the same
+publication path, so subscribed clients receive it and any pending client
+revision becomes stale. Invalid external documents remain on disk for
+correction while the last known-good runtime state remains authoritative.
+
 The Settings client does not embed shell-owned transient surfaces. To open the
 desktop wallpaper workflow it requests the compositor to route the action to
 the embedded shell:
@@ -301,9 +307,17 @@ wait for the matching worker event while compositor frame dispatch continues.
 | `audio.stream.set` | `{"stream_id":12,"percent":40}` | Queue an application-stream level update |
 | `brightness.get` | monitor ID and connector name | Current normalized level for one output |
 | `brightness.set` | monitor ID, connector, and percent | Queue a level update for one output |
+| `software_dimming.get` | `{"monitor_id":7}` | Current gamma-LUT dimming level and capability for one output |
+| `software_dimming.set` | `{"monitor_id":7,"percent":35}` | Apply scanout-time dimming to one output |
 
 Percent values are integers from 0 through 100. System-control methods are
 rejected while the secure session is locked.
+
+Software dimming multiplies the output's DRM CRTC gamma ramp, after any
+external gamma-control ramp, and therefore does not modify pixels in Denial's
+capture buffers. A read returns `supported: false` when the active CRTC has no
+usable `GAMMA_LUT`; a set then returns `unavailable`. The setting is runtime
+state and Denial restores the inherited CRTC gamma blob during shutdown.
 
 ## Flutter UI lifecycle and recovery
 

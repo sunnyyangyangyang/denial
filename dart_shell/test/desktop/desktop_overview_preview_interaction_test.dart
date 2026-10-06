@@ -56,6 +56,112 @@ void main() {
     expect(activations, 0);
   });
 
+  testWidgets('overview emphasis waits for the position animation', (
+    tester,
+  ) async {
+    final transitionCompleted = ValueNotifier<bool>(false);
+    addTearDown(transitionCompleted.dispose);
+
+    Widget scene({required bool selected}) {
+      return Directionality(
+        textDirection: TextDirection.ltr,
+        child: DesktopOverviewTransitionStatus(
+          completed: transitionCompleted,
+          child: Center(
+            child: SizedBox(
+              width: 240,
+              height: 160,
+              child: DesktopOverviewPreviewInteraction(
+                overviewActive: true,
+                overview: true,
+                desktopWidget: false,
+                dragging: false,
+                selected: selected,
+                label: 'Window preview',
+                onTap: () {},
+                onClose: () {},
+                onDragStart: () {},
+                onDragUpdate: (_) {},
+                onDragEnd: () {},
+                onDragCancel: () {},
+                child: const ColoredBox(color: Color(0xff000000)),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    await tester.pumpWidget(scene(selected: true));
+    final preview = find.byType(DesktopOverviewPreviewInteraction);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: tester.getCenter(preview));
+    await tester.pumpAndSettle();
+
+    var scale = tester.widget<AnimatedScale>(find.byType(AnimatedScale));
+    expect(scale.scale, 1.0);
+
+    transitionCompleted.value = true;
+    await tester.pump();
+    scale = tester.widget<AnimatedScale>(find.byType(AnimatedScale));
+    expect(scale.scale, 1.018);
+
+    await tester.pumpWidget(scene(selected: false));
+    scale = tester.widget<AnimatedScale>(find.byType(AnimatedScale));
+    expect(scale.scale, 1.018);
+    final highlight = tester.widget<AnimatedContainer>(
+      find.byType(AnimatedContainer),
+    );
+    final border = (highlight.decoration! as BoxDecoration).border! as Border;
+    expect(border.top.width, 0.0);
+  });
+
+  testWidgets('resized retained preview taps at its overview rectangle', (
+    tester,
+  ) async {
+    var activations = 0;
+    const desktopRect = Rect.fromLTWH(820, 500, 320, 240);
+    const overviewRect = Rect.fromLTWH(60, 40, 176, 132);
+
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
+          width: 1200,
+          height: 800,
+          child: Stack(
+            children: [
+              RetainedAnimatedPositioned(
+                rect: overviewRect,
+                layoutRect: desktopRect,
+                globalClipRect: const Rect.fromLTWH(0, 0, 1200, 800),
+                duration: Duration.zero,
+                child: DesktopOverviewPreviewInteraction(
+                  overviewActive: true,
+                  overview: true,
+                  desktopWidget: false,
+                  dragging: false,
+                  label: 'Resized window preview',
+                  onTap: () => activations += 1,
+                  onClose: () {},
+                  onDragStart: () {},
+                  onDragUpdate: (_) {},
+                  onDragEnd: () {},
+                  onDragCancel: () {},
+                  child: const ColoredBox(color: Color(0xff000000)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    await tester.tapAt(overviewRect.center);
+    expect(activations, 1);
+  });
+
   testWidgets('surviving previews animate to the recomputed overview frames', (
     tester,
   ) async {

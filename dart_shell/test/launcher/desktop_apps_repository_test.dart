@@ -113,6 +113,67 @@ void main() {
       appIcon.path,
     );
   });
+
+  test('loads desktop-entry keywords into launcher search metadata', () async {
+    _writeFile(
+      dataDirectory,
+      'applications/auto-caption.desktop',
+      '[Desktop Entry]\n'
+          'Type=Application\n'
+          'Name=Auto Caption\n'
+          'Exec=/usr/bin/auto-caption\n'
+          'Categories=Utility;AudioVideo;\n'
+          r'Keywords=subtitle;live\sstream;caption\;overlay;'
+          '\n',
+    );
+
+    final applications = await repository.loadApplications();
+    final application = applications.singleWhere(
+      (app) => app.id == 'auto-caption.desktop',
+    );
+
+    expect(application.keywords, const <String>[
+      'subtitle',
+      'live stream',
+      'caption;overlay',
+    ]);
+    expect(application.searchableText, contains('subtitle'));
+    expect(application.searchableText, contains('live stream'));
+    expect(application.searchableText, contains('caption;overlay'));
+  });
+
+  test('uses the current locale for desktop-entry keywords', () async {
+    final localizedRepository = DesktopAppsRepository(
+      paths: RuntimePaths(
+        environment: <String, String>{
+          'HOME': p.join(temporaryDirectory.path, 'home'),
+          'XDG_DATA_HOME': dataDirectory.path,
+          'XDG_DATA_DIRS': '',
+          'LANG': 'zh_CN.UTF-8',
+        },
+      ),
+    );
+    _writeFile(
+      dataDirectory,
+      'applications/localized.desktop',
+      '[Desktop Entry]\n'
+          'Type=Application\n'
+          'Name=Localized App\n'
+          'Exec=/usr/bin/localized-app\n'
+          'Keywords=default;\n'
+          'Keywords[zh]=language;\n'
+          'Keywords[zh_CN]=territory;\n',
+    );
+
+    final applications = await localizedRepository.loadApplications();
+    final application = applications.singleWhere(
+      (app) => app.id == 'localized.desktop',
+    );
+
+    expect(application.keywords, const <String>['territory']);
+    expect(application.searchableText, contains('territory'));
+    expect(application.searchableText, isNot(contains('default')));
+  });
 }
 
 File _writeFile(Directory root, String relativePath, String contents) {

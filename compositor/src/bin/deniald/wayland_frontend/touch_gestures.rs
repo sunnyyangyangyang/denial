@@ -1178,17 +1178,9 @@ fn release_geometry_constraints(state: &mut RuntimeState, window: &Window) -> bo
     };
     let frontend = state.wayland.as_mut().expect("missing Wayland frontend");
     let surface_id = root.id();
-    let shell_maximized = frontend
-        .shell_maximize_restore_geometries
-        .remove(&surface_id)
-        .is_some();
-    let shell_fullscreen = frontend
-        .shell_fullscreen_restore_geometries
-        .remove(&surface_id)
-        .is_some();
-    let shell_locked = frontend.shell_fullscreen_locks.remove(&surface_id);
-    frontend.restore_window_geometries.remove(&surface_id);
-    client_cleared || shell_maximized || shell_fullscreen || shell_locked
+    let shell_owned = frontend.take_shell_presentation(&surface_id).is_some();
+    frontend.clear_restore_geometry(&surface_id);
+    client_cleared || shell_owned
 }
 
 fn constrain_local_geometry(

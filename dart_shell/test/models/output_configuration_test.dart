@@ -15,10 +15,12 @@ void main() {
       'primary_output': 'DP-1',
       'capabilities': <String, Object?>{
         'apply': true,
+        'enable': true,
         'position': true,
         'mode': true,
         'scale': true,
         'transform': true,
+        'scrolling_layout_axis': true,
         'adaptive_sync': true,
         'persistent': true,
       },
@@ -40,6 +42,7 @@ void main() {
           'logical_height': 1920,
           'scale': 1.0,
           'transform': '90',
+          'scrolling_layout_axis': 'horizontal',
           'adaptive_sync_supported': true,
           'adaptive_sync': false,
           'current_mode': <String, Object?>{
@@ -63,7 +66,9 @@ void main() {
     final output = configuration.outputs.single;
     expect(configuration.serial, 9);
     expect(configuration.primaryOutput, 'DP-1');
+    expect(configuration.capabilities.enable, isTrue);
     expect(configuration.capabilities.transform, isTrue);
+    expect(configuration.capabilities.scrollingLayoutAxis, isTrue);
     expect(configuration.capabilities.adaptiveSync, isTrue);
     expect(configuration.pendingConfirmation?.token, 27);
     expect(output.monitorId, 17);
@@ -72,11 +77,13 @@ void main() {
       1755421200000,
     );
     expect(output.transform, DenialOutputTransform.rotate90);
+    expect(output.scrollingLayoutAxis, DenialScrollingLayoutAxis.horizontal);
     expect(output.adaptiveSyncSupported, isTrue);
     expect(output.effectiveMode.refreshMillihz, 59940);
     expect(output.draftLogicalSize.width, 1080);
     expect(output.draftLogicalSize.height, 1920);
     expect(output.toApplyJson()['transform'], '90');
+    expect(output.toApplyJson()['scrolling_layout_axis'], 'horizontal');
   });
 
   test('draft mode, scale, and rotation recalculate logical size', () {
@@ -98,6 +105,7 @@ void main() {
       logicalHeight: 1440,
       scale: 1,
       transform: DenialOutputTransform.normal,
+      scrollingLayoutAxis: DenialScrollingLayoutAxis.auto,
       adaptiveSyncSupported: true,
       adaptiveSync: false,
       currentMode: mode,
@@ -114,6 +122,12 @@ void main() {
     expect(portrait.toApplyJson()['transform'], '270');
     expect(portrait.toApplyJson()['adaptive_sync'], isFalse);
 
+    final vertical = portrait.copyWith(
+      scrollingLayoutAxis: DenialScrollingLayoutAxis.vertical,
+    );
+    expect(vertical.scrollingLayoutAxis, DenialScrollingLayoutAxis.vertical);
+    expect(vertical.toApplyJson()['scrolling_layout_axis'], 'vertical');
+
     final variableRefreshRate = portrait.copyWith(adaptiveSync: true);
     expect(variableRefreshRate.adaptiveSyncSupported, isTrue);
     expect(variableRefreshRate.toApplyJson()['adaptive_sync'], isTrue);
@@ -121,5 +135,15 @@ void main() {
     final customScale = output.copyWith(scale: 0.94);
     expect(customScale.scale, closeTo(113 / 120, 0.000001));
     expect(customScale.toApplyJson()['scale'], customScale.scale);
+
+    final disabled = output.copyWith(enabled: false);
+    expect(disabled.enabled, isFalse);
+    expect(disabled.powered, isFalse);
+    expect(disabled.toApplyJson()['enabled'], isFalse);
+    expect(disabled.toApplyJson()['powered'], isFalse);
+
+    final reenabled = disabled.copyWith(enabled: true);
+    expect(reenabled.enabled, isTrue);
+    expect(reenabled.powered, isTrue);
   });
 }

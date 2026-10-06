@@ -118,19 +118,15 @@ abstract final class DesktopMetrics {
   }
 }
 
-/// Clips only layout-managed scrolling tiles to their output viewport.
+/// Clips a window to its owning output viewport.
 ///
-/// Pinned windows are floating overlays even while the desktop uses the
-/// scrolling layout, so their rendering and input regions must remain free of
-/// the tile viewport clip.
-Rect? desktopScrollingOutputClip({
-  required DesktopWindowLayout windowLayout,
-  required bool pinned,
-  required bool transformed,
+/// This clip is invariant across overview, switcher, workspace, minimize, and
+/// pinned-window presentation. Only an actively dragged window may cross its
+/// owning output while the drag is in progress.
+Rect? desktopOutputClip({
+  required bool activelyDragging,
   required Rect? outputRect,
-}) => windowLayout == DesktopWindowLayout.scrolling && !pinned && !transformed
-    ? outputRect
-    : null;
+}) => activelyDragging ? null : outputRect;
 
 enum DesktopPanel { none, launcher, dashboard }
 
@@ -284,6 +280,7 @@ class DesktopWindowPlacement {
     this.maximized = false,
     this.fullscreen = false,
     this.serverSideDecorated = true,
+    this.serverFrameWhileMaximized = false,
     this.dragging = false,
     this.layoutPreviewing = false,
     this.restoreFrame,
@@ -299,6 +296,11 @@ class DesktopWindowPlacement {
   final bool maximized;
   final bool fullscreen;
   final bool serverSideDecorated;
+
+  /// Whether the active layout keeps the shell frame around a maximized
+  /// window. Managed layouts leave breathing room around their tiles, unlike
+  /// stacking-mode maximize and true fullscreen.
+  final bool serverFrameWhileMaximized;
   final bool dragging;
 
   /// Whether this window is temporarily displaced by a managed layout drag.
@@ -306,8 +308,13 @@ class DesktopWindowPlacement {
   final Rect? restoreFrame;
   final Rect? fullscreenRestoreFrame;
 
+  bool get drawsLiveServerFrame =>
+      serverSideDecorated &&
+      !fullscreen &&
+      (!maximized || serverFrameWhileMaximized);
+
   double get frameBorder =>
-      fullscreen || !serverSideDecorated ? 0.0 : DesktopMetrics.frameBorder;
+      drawsLiveServerFrame ? DesktopMetrics.frameBorder : 0.0;
 
   Rect get contentRect => frame.deflate(frameBorder);
 
@@ -320,6 +327,7 @@ class DesktopWindowPlacement {
     bool? maximized,
     bool? fullscreen,
     bool? serverSideDecorated,
+    bool? serverFrameWhileMaximized,
     bool? dragging,
     bool? layoutPreviewing,
     Rect? restoreFrame,
@@ -337,6 +345,8 @@ class DesktopWindowPlacement {
       maximized: maximized ?? this.maximized,
       fullscreen: fullscreen ?? this.fullscreen,
       serverSideDecorated: serverSideDecorated ?? this.serverSideDecorated,
+      serverFrameWhileMaximized:
+          serverFrameWhileMaximized ?? this.serverFrameWhileMaximized,
       dragging: dragging ?? this.dragging,
       layoutPreviewing: layoutPreviewing ?? this.layoutPreviewing,
       restoreFrame: clearRestoreFrame
@@ -569,6 +579,7 @@ bool _desktopPlacementHasSameSceneStructure(
       left.maximized == right.maximized &&
       left.fullscreen == right.fullscreen &&
       left.serverSideDecorated == right.serverSideDecorated &&
+      left.serverFrameWhileMaximized == right.serverFrameWhileMaximized &&
       left.dragging == right.dragging &&
       left.layoutPreviewing == right.layoutPreviewing &&
       left.restoreFrame == right.restoreFrame &&

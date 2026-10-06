@@ -42,6 +42,39 @@ pub(super) fn constrain_pointer_to_outputs(
 }
 
 impl WaylandFrontend {
+    fn layer_surface_under(
+        &self,
+        position: Point<f64, Logical>,
+        kinds: &[WlrLayer],
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        let sample =
+            Point::<i32, Logical>::from((position.x.floor() as i32, position.y.floor() as i32));
+        let output = self
+            .outputs
+            .iter()
+            .find(|output| output.logical_geometry.contains(sample))?;
+        let output_origin = output.logical_geometry.loc;
+        let output_position = position - output_origin.to_f64();
+        let map = layer_map_for_output(&output.output);
+        for kind in kinds {
+            for layer in map.layers_on(*kind).rev() {
+                let Some(geometry) = map.layer_geometry(layer) else {
+                    continue;
+                };
+                let Some((surface, offset)) = layer.surface_under(
+                    output_position - geometry.loc.to_f64(),
+                    WindowSurfaceType::ALL,
+                ) else {
+                    continue;
+                };
+                let global_origin =
+                    saturating_point_add(saturating_point_add(output_origin, geometry.loc), offset);
+                return Some((surface, global_origin.to_f64()));
+            }
+        }
+        None
+    }
+
     #[cfg(feature = "flutter")]
     pub(super) fn queue_cursor_state_for_flutter_generation(&mut self) {
         self.published_cursor_state = None;
@@ -73,7 +106,7 @@ impl WaylandFrontend {
         self.text_input.set_shell_capture(false);
         self.text_input.retire_flutter_generation();
         self.synchronize_input_method();
-        self.visible_window_ids.clear();
+        self.clear_visible_windows();
         self.input_visibility_known = false;
         self.invalidate_idle_inhibition();
         self.client_input_route_cache = None;
@@ -93,14 +126,20 @@ impl WaylandFrontend {
         &self,
         position: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
-        self.space
-            .element_under(position)
-            .and_then(|(window, location)| {
-                window
-                    .surface_under(position - location.to_f64(), WindowSurfaceType::ALL)
-                    .map(|(surface, offset)| {
-                        (surface, saturating_point_add(offset, location).to_f64())
+        self.layer_surface_under(position, &[WlrLayer::Overlay, WlrLayer::Top])
+            .or_else(|| {
+                self.space
+                    .element_under(position)
+                    .and_then(|(window, location)| {
+                        window
+                            .surface_under(position - location.to_f64(), WindowSurfaceType::ALL)
+                            .map(|(surface, offset)| {
+                                (surface, saturating_point_add(offset, location).to_f64())
+                            })
                     })
+            })
+            .or_else(|| {
+                self.layer_surface_under(position, &[WlrLayer::Bottom, WlrLayer::Background])
             })
     }
 
@@ -326,7 +365,7 @@ impl WaylandFrontend {
                     .contains(&popup.surface().id())
                     && self
                         .surface_id(popup.surface())
-                        .is_some_and(|surface_id| self.visible_window_ids.contains(&surface_id))
+                        .is_some_and(|surface_id| self.window_id_is_visible(surface_id))
                 {
                     self.pending_input_method_frame_callbacks
                         .remove(&popup.surface().id());

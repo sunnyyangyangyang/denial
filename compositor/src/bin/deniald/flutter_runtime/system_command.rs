@@ -20,6 +20,7 @@ use crate::settings::{
     ApplicationEnvironment, DEFAULT_CURSOR_SIZE, load_application_environment, load_cursor_size,
     validate_desktop_file_id,
 };
+use crate::x11_input_method::discover_xim_modifier;
 
 pub const CHANNEL: &CStr = c"denial/system_command";
 
@@ -625,6 +626,15 @@ fn launch_application(
     let permit = LAUNCH_LIMITER
         .try_acquire()
         .ok_or(DispatchError::ApplicationLimitReached)?;
+    let discovered_xmodifiers = x11_display
+        .filter(|_| application_environment.allows_discovered_xmodifiers(desktop_file_id))
+        .and_then(|display| match discover_xim_modifier(display) {
+            Ok(modifier) => modifier,
+            Err(error) => {
+                debug!(%error, "could not discover Xwayland's active XIM server");
+                None
+            }
+        });
     let mut command = application_command(
         arguments,
         launch_request_id,
@@ -636,6 +646,7 @@ fn launch_application(
         cursor_size,
         application_environment,
         desktop_file_id,
+        discovered_xmodifiers.as_deref().map(OsStr::new),
     );
     let child = command.spawn().map_err(DispatchError::Spawn)?;
     let pid = child.id();
@@ -689,6 +700,7 @@ fn application_command(
     cursor_size: u32,
     application_environment: &ApplicationEnvironment,
     desktop_file_id: Option<&str>,
+    discovered_xmodifiers: Option<&OsStr>,
 ) -> Command {
     let mut command = Command::new(&arguments[0]);
     // Command inherits the user session environment intentionally: PATH,
@@ -729,7 +741,7 @@ fn application_command(
     // them after Denial's inherited-session cleanup and endpoint defaults so
     // an explicit null can remove DISPLAY or another default deliberately.
     // Per-launch activation metadata below remains compositor-owned.
-    application_environment.apply(&mut command, desktop_file_id);
+    application_environment.apply(&mut command, desktop_file_id, discovered_xmodifiers);
     // Internal tool metadata must never replace an application's restored mask.
     command.env_remove(denial_core::cpu_affinity::APPLICATION_CPUS_ENV);
     // calloop's signalfd intentionally blocks the shutdown signals in every

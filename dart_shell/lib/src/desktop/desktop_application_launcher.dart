@@ -11,12 +11,9 @@ class _DesktopLauncherEntry {
     required this.icon,
     required this.desktopApp,
     required this.localApp,
+    required this.searchableText,
   }) : sortName = name.toLowerCase(),
-       searchableText = <String>[
-         id,
-         name,
-         ...categories,
-       ].join(' ').toLowerCase();
+       assert(searchableText == searchableText.toLowerCase());
 
   factory _DesktopLauncherEntry.desktop(DesktopApp app) {
     return _DesktopLauncherEntry._(
@@ -28,6 +25,7 @@ class _DesktopLauncherEntry {
       icon: null,
       desktopApp: app,
       localApp: null,
+      searchableText: app.searchableText,
     );
   }
 
@@ -44,6 +42,11 @@ class _DesktopLauncherEntry {
       icon: app.icon,
       desktopApp: null,
       localApp: app,
+      searchableText: <String>[
+        app.id,
+        app.titleFor(context),
+        ...app.categoriesFor(context),
+      ].join(' ').toLowerCase(),
     );
   }
 

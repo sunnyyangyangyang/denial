@@ -10,15 +10,23 @@ use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::seat::WaylandFocus;
 use tracing::info;
 
+use super::super::output_topology::ScrollingLayoutAxis;
+#[cfg(feature = "flutter")]
+use super::super::settings::ScrollingLayoutWheelUpDirection;
 use super::super::window_grab::constrain_dimension;
+#[cfg(feature = "flutter")]
+use super::super::window_layout::DEFAULT_SCROLLING_COLUMN_FRACTION;
 use super::super::window_layout::{
-    DEFAULT_SCROLLING_COLUMN_FRACTION, LayoutAxis, LayoutDirection, LayoutInsertion,
-    LayoutPlacement, LayoutResizeEdges, LayoutResizeRequest, LayoutSpace, WindowLayoutKind,
-    create_window_layout, directional_neighbor,
+    LayoutAxis, LayoutDirection, LayoutInsertion, LayoutPlacement, LayoutResizeEdges,
+    LayoutResizeRequest, LayoutSpace, WindowLayoutKind, create_window_layout, directional_neighbor,
 };
+#[cfg(feature = "flutter")]
+use super::WindowId;
 use super::managed_window::ManagedWindow;
 #[cfg(feature = "flutter")]
 use super::shell_content_geometry;
+#[cfg(feature = "flutter")]
+use super::window_presentation::{ShellFullscreenUnderlay, ShellWindowPresentation};
 use super::{WaylandFrontend, WindowGeometryAuthority};
 
 #[cfg(feature = "flutter")]
@@ -30,6 +38,8 @@ pub(crate) struct HorizontalLayoutScrollFrame {
 
 #[cfg(feature = "flutter")]
 const TOUCHPAD_SCROLLING_TILE_SWIPE_DISTANCE: f64 = 125.0;
+#[cfg(feature = "flutter")]
+const MOUSE_WHEEL_ANGLE_PER_STEP: f64 = 15.0;
 
 const LAYOUT_DROP_EDGE_FRACTION: f64 = 0.28;
 const LAYOUT_DROP_HYSTERESIS_FRACTION: f64 = 0.04;
@@ -72,11 +82,31 @@ fn touchpad_scrolling_layout_delta(
     delta_x * default_tile_stride * swipe_speed_factor / TOUCHPAD_SCROLLING_TILE_SWIPE_DISTANCE
 }
 
-fn scrolling_layout_axis(transform: super::OutputTransform) -> LayoutAxis {
-    if transform.swaps_axes() {
-        LayoutAxis::Vertical
-    } else {
-        LayoutAxis::Horizontal
+#[cfg(feature = "flutter")]
+fn mouse_wheel_scrolling_layout_delta(
+    vertical_delta: f64,
+    work_extent: i32,
+    gap: i32,
+    speed: f64,
+    up_direction: ScrollingLayoutWheelUpDirection,
+) -> f64 {
+    let default_tile_stride =
+        f64::from(work_extent.max(1)) * DEFAULT_SCROLLING_COLUMN_FRACTION + f64::from(gap.max(0));
+    let direction = match up_direction {
+        ScrollingLayoutWheelUpDirection::Left => -1.0,
+        ScrollingLayoutWheelUpDirection::Right => 1.0,
+    };
+    vertical_delta * direction * default_tile_stride * speed / MOUSE_WHEEL_ANGLE_PER_STEP
+}
+
+fn scrolling_layout_axis(
+    setting: ScrollingLayoutAxis,
+    transform: super::OutputTransform,
+) -> LayoutAxis {
+    match setting {
+        ScrollingLayoutAxis::Auto if transform.swaps_axes() => LayoutAxis::Vertical,
+        ScrollingLayoutAxis::Auto | ScrollingLayoutAxis::Horizontal => LayoutAxis::Horizontal,
+        ScrollingLayoutAxis::Vertical => LayoutAxis::Vertical,
     }
 }
 
@@ -96,6 +126,29 @@ fn layout_frame_minimum_size(
 }
 
 impl WaylandFrontend {
+    fn scrolling_layout_axis_for_output(&self, output: &super::WaylandOutput) -> LayoutAxis {
+        scrolling_layout_axis(
+            self.scrolling_layout_axes
+                .get(&output.connector)
+                .copied()
+                .unwrap_or_default(),
+            output.transform,
+        )
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(crate) fn set_scrolling_layout_axes(
+        &mut self,
+        axes: &std::collections::BTreeMap<String, ScrollingLayoutAxis>,
+    ) -> bool {
+        if self.scrolling_layout_axes == *axes {
+            return false;
+        }
+        self.scrolling_layout_axes.clone_from(axes);
+        self.arrange_layout_windows();
+        true
+    }
+
     pub(super) fn window_layout_manages_geometry(&self) -> bool {
         self.window_layout.manages_geometry()
     }
@@ -103,6 +156,55 @@ impl WaylandFrontend {
     pub(crate) fn window_is_layout_managed(&self, window: &Window) -> bool {
         self.window_root_surface(window)
             .is_some_and(|surface| self.window_layout.contains(&surface.id()))
+    }
+
+    pub(super) fn window_is_scrolling_layout_managed(&self, window: &Window) -> bool {
+        self.window_layout.kind() == WindowLayoutKind::Scrolling
+            && self.window_is_layout_managed(window)
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(super) fn scrolling_resize_axis_for_window(&self, window: &Window) -> Option<LayoutAxis> {
+        if self.window_layout.kind() != WindowLayoutKind::Scrolling {
+            return None;
+        }
+        let window_id = self.window_root_surface(window)?.id();
+        let space = self.window_layout.space_for(&window_id)?;
+        self.outputs
+            .iter()
+            .find(|output| output.id == space.output)
+            .map(|output| self.scrolling_layout_axis_for_output(output))
+    }
+
+    pub(super) fn window_is_layout_maximized(&self, window: &Window) -> bool {
+        self.window_root_surface(window)
+            .is_some_and(|surface| self.window_layout.is_maximized(&surface.id()))
+    }
+
+    pub(super) fn set_layout_window_maximized(&mut self, window: &Window, maximized: bool) -> bool {
+        if self.window_layout.kind() != WindowLayoutKind::Scrolling {
+            return false;
+        }
+        self.window_root_surface(window)
+            .is_some_and(|surface| self.window_layout.set_maximized(&surface.id(), maximized))
+    }
+
+    pub(super) fn layout_target_for_window(
+        &mut self,
+        window: &Window,
+    ) -> Option<Rectangle<i32, Logical>> {
+        let window_id = self.window_root_surface(window)?.id();
+        self.prepare_layout_arrangement();
+        let frame = self
+            .current_layout_placements()
+            .into_iter()
+            .find_map(|placement| (placement.window == window_id).then_some(placement.geometry))?;
+        #[cfg(feature = "flutter")]
+        let draw_frame = super::shell_draws_server_frame(window);
+        #[cfg(feature = "flutter")]
+        return Some(shell_content_geometry(frame, draw_frame));
+        #[cfg(not(feature = "flutter"))]
+        Some(frame)
     }
 
     /// Follow an activated window in layouts with a movable viewport.
@@ -127,6 +229,7 @@ impl WaylandFrontend {
         &mut self,
         delta_x: f64,
     ) -> Option<HorizontalLayoutScrollFrame> {
+        self.prepare_layout_arrangement();
         let (layout_space, work_area, gap, monitor_geometry, axis) =
             self.horizontal_layout_scroll_context()?;
         let swipe_speed_factor = self.settings.touchpad().scrolling_layout_swipe_speed_factor;
@@ -153,11 +256,44 @@ impl WaylandFrontend {
     }
 
     #[cfg(feature = "flutter")]
+    pub(crate) fn scroll_layout_with_mouse_wheel(
+        &mut self,
+        vertical_delta: f64,
+    ) -> Option<HorizontalLayoutScrollFrame> {
+        self.prepare_layout_arrangement();
+        let (layout_space, work_area, gap, monitor_geometry, axis) =
+            self.horizontal_layout_scroll_context()?;
+        let settings = self.settings.scrolling_layout_wheel_settings();
+        let delta_x = mouse_wheel_scrolling_layout_delta(
+            vertical_delta,
+            axis.main_extent(work_area),
+            gap,
+            settings.speed,
+            settings.up_direction,
+        );
+        if !self
+            .window_layout
+            .scroll_horizontally(layout_space, work_area, gap, axis, delta_x)
+        {
+            return None;
+        }
+        self.arrange_layout_windows();
+        Some(self.horizontal_layout_scroll_frame(
+            layout_space,
+            work_area,
+            gap,
+            monitor_geometry,
+            None,
+        ))
+    }
+
+    #[cfg(feature = "flutter")]
     pub(crate) fn finish_layout_horizontal_scroll(
         &mut self,
         cancelled: bool,
         projected_delta_x: Option<f64>,
     ) -> Option<HorizontalLayoutScrollFrame> {
+        self.prepare_layout_arrangement();
         let (layout_space, work_area, gap, monitor_geometry, axis) =
             self.horizontal_layout_scroll_context()?;
         let swipe_speed_factor = self.settings.touchpad().scrolling_layout_swipe_speed_factor;
@@ -218,7 +354,7 @@ impl WaylandFrontend {
             work_area,
             self.layout_gap(),
             monitor_geometry,
-            scrolling_layout_axis(output.transform),
+            self.scrolling_layout_axis_for_output(output),
         ))
     }
 
@@ -338,7 +474,8 @@ impl WaylandFrontend {
 
     /// Plan the exact post-drop layout on a disposable snapshot. Publishing
     /// every changed sibling lets Flutter animate a whole scrolling column as
-    /// one coherent rearrangement while protocol geometry remains untouched.
+    /// one coherent rearrangement. The grab may request these speculative
+    /// client sizes, but this disposable layout never becomes authoritative.
     #[cfg(feature = "flutter")]
     pub(crate) fn layout_drop_preview(
         &self,
@@ -354,18 +491,6 @@ impl WaylandFrontend {
         else {
             return Vec::new();
         };
-        let mut preview = self.window_layout.snapshot();
-        let changed = match target.mode() {
-            LayoutDropMode::Swap => preview.swap(&window_id, &target_id),
-            LayoutDropMode::Split(direction) => {
-                preview.move_beside(&window_id, &target_id, direction)
-            }
-        };
-        if !changed {
-            return Vec::new();
-        }
-        preview.activate(&window_id);
-
         let gap = self.layout_gap();
         let workspace_count = self.layout_workspace_count();
         let contexts = self
@@ -375,12 +500,38 @@ impl WaylandFrontend {
                 (
                     output.id,
                     self.maximize_work_area(Some(&output.output), output.logical_geometry),
-                    scrolling_layout_axis(output.transform),
+                    self.scrolling_layout_axis_for_output(output),
                 )
             })
             .collect::<Vec<_>>();
+        let mut preview = self.window_layout.snapshot();
+        let changed = match target.mode() {
+            LayoutDropMode::Swap => preview.swap(&window_id, &target_id),
+            LayoutDropMode::Split(direction) => {
+                let Some(space) = preview.space_for(&target_id) else {
+                    return Vec::new();
+                };
+                let Some((_, work_area, axis)) = contexts
+                    .iter()
+                    .find(|(output, _, _)| *output == space.output)
+                else {
+                    return Vec::new();
+                };
+                preview.set_maximize_area(space, *work_area);
+                preview.prepare_arrange(space, *work_area, gap, *axis);
+                preview.move_beside_for_preview(
+                    &window_id, &target_id, direction, *work_area, gap, *axis,
+                )
+            }
+        };
+        if !changed {
+            return Vec::new();
+        }
+        preview.activate(&window_id);
+
         for (output, work_area, axis) in &contexts {
             for workspace in 1..=workspace_count {
+                preview.set_maximize_area(LayoutSpace::new(*output, workspace), *work_area);
                 preview.prepare_arrange(
                     LayoutSpace::new(*output, workspace),
                     *work_area,
@@ -580,7 +731,9 @@ impl WaylandFrontend {
             return false;
         }
 
-        self.layout_insertion_anchors.clear();
+        for record in self.window_registry.values_mut() {
+            record.layout_insertion_anchor = None;
+        }
         let previously_managed = self.window_layout.manages_geometry();
         let next = create_window_layout(kind);
         let next_managed = next.manages_geometry();
@@ -613,18 +766,25 @@ impl WaylandFrontend {
             return false;
         };
         let window_id = root.id();
-        let remembered_anchor = self.layout_insertion_anchors.remove(&window_id);
+        let remembered_anchor = self
+            .window_record_for_surface_mut(&window_id)
+            .and_then(|record| record.layout_insertion_anchor.take());
         if !self.window_layout_eligible(window) {
             let removed = self.window_layout.remove(&window_id);
             if removed {
                 self.restore_detached_window_geometry(window, &window_id);
                 self.arrange_layout_windows();
-            } else {
-                self.layout_restore_geometries.remove(&window_id);
+            } else if let Some(record) = self.window_record_for_surface_mut(&window_id) {
+                record.layout_restore_geometry = None;
             }
             return removed;
         }
+        let adopt_scrolling_maximize = self.should_adopt_scrolling_maximize(window);
         if self.window_layout.contains(&window_id) {
+            if adopt_scrolling_maximize && self.adopt_scrolling_maximize(&window_id) {
+                self.arrange_layout_windows();
+                return true;
+            }
             let minimum = self.layout_minimum_size(window);
             if self.window_layout.update_minimum_size(&window_id, minimum) {
                 self.arrange_layout_windows();
@@ -634,9 +794,8 @@ impl WaylandFrontend {
         }
         let geometry = self.window_geometry_target(window);
         let restore = self
-            .layout_restore_geometries
-            .get(&window_id)
-            .copied()
+            .window_record_for_surface(&window_id)
+            .and_then(|record| record.layout_restore_geometry)
             .filter(|geometry| has_visible_size(*geometry))
             .unwrap_or_else(|| self.stacking_geometry_for_layout(window, geometry));
         let Some(physical_output) = self
@@ -653,9 +812,10 @@ impl WaylandFrontend {
         }
         let space = self.layout_space_for_window(window, physical_output);
         if has_visible_size(restore) {
-            self.layout_restore_geometries
-                .entry(window_id.clone())
-                .or_insert(restore);
+            self.ensure_window_record_for_surface(&window_id)
+                .expect("managed window has no stable id")
+                .layout_restore_geometry
+                .get_or_insert(restore);
         }
         let anchor = remembered_anchor
             .or_else(|| self.focused_layout_window())
@@ -667,6 +827,9 @@ impl WaylandFrontend {
         });
         let minimum = self.layout_minimum_size(window);
         self.window_layout.update_minimum_size(&window_id, minimum);
+        if adopt_scrolling_maximize {
+            self.adopt_scrolling_maximize(&window_id);
+        }
         self.arrange_layout_windows();
         true
     }
@@ -687,7 +850,9 @@ impl WaylandFrontend {
         else {
             return;
         };
-        self.layout_insertion_anchors.insert(window_id, anchor);
+        if let Some(record) = self.ensure_window_record_for_surface(&window_id) {
+            record.layout_insertion_anchor = Some(anchor);
+        }
     }
 
     /// Detach a window and collapse its layout node. `forget_restore` is false
@@ -697,15 +862,29 @@ impl WaylandFrontend {
         window: &Window,
         forget_restore: bool,
     ) -> bool {
+        let removed = self.detach_window_from_layout(window, forget_restore);
+        if removed {
+            self.arrange_layout_windows();
+        }
+        removed
+    }
+
+    /// Remove one leaf without arranging yet. Topology retirement batches all
+    /// leaves from a disabled output so surviving output trees are arranged
+    /// exactly once and never reconstructed from stacking order.
+    pub(super) fn detach_window_from_layout(
+        &mut self,
+        window: &Window,
+        forget_restore: bool,
+    ) -> bool {
         let Some(window_id) = self.window_root_surface(window).map(|root| root.id()) else {
             return false;
         };
         let removed = self.window_layout.remove(&window_id);
         if forget_restore {
-            self.layout_restore_geometries.remove(&window_id);
-        }
-        if removed {
-            self.arrange_layout_windows();
+            if let Some(record) = self.window_record_for_surface_mut(&window_id) {
+                record.layout_restore_geometry = None;
+            }
         }
         removed
     }
@@ -732,25 +911,34 @@ impl WaylandFrontend {
                     .or(self.ticker_output)
                     .or_else(|| self.outputs.first().map(|output| output.id))?;
                 let space = self.layout_space_for_window(window, physical_output);
-                Some((root.id(), space, restore))
+                let adopt_scrolling_maximize = self.should_adopt_scrolling_maximize(window);
+                Some((root.id(), space, restore, adopt_scrolling_maximize))
             })
             .collect::<Vec<_>>();
         let mut previous_by_space = HashMap::<LayoutSpace, ObjectId>::new();
         let mut insertions = Vec::with_capacity(windows.len());
-        for (window, space, geometry) in windows {
+        let mut maximize_after_rebuild = Vec::new();
+        for (window, space, geometry, adopt_scrolling_maximize) in windows {
             if has_visible_size(geometry) {
-                self.layout_restore_geometries
-                    .entry(window.clone())
-                    .or_insert(geometry);
+                self.ensure_window_record_for_surface(&window)
+                    .expect("managed window has no stable id")
+                    .layout_restore_geometry
+                    .get_or_insert(geometry);
             }
             let anchor = previous_by_space.insert(space, window.clone());
             insertions.push(LayoutInsertion {
-                window,
+                window: window.clone(),
                 space,
                 anchor,
             });
+            if adopt_scrolling_maximize {
+                maximize_after_rebuild.push(window);
+            }
         }
         self.window_layout.rebuild(insertions);
+        for window in maximize_after_rebuild {
+            self.adopt_scrolling_maximize(&window);
+        }
         self.arrange_layout_windows()
     }
 
@@ -772,11 +960,13 @@ impl WaylandFrontend {
         let placements = self.current_layout_placements();
 
         let mut changed = minimum_sizes_changed || ownership_changed;
+        let mut changed_parents = Vec::new();
         for LayoutPlacement {
             window: window_id,
             geometry: frame,
         } in placements
         {
+            let layout_maximized = self.window_layout.is_maximized(&window_id);
             let window = self.space.elements().find_map(|window| {
                 (self.window_root_surface(window).map(|root| root.id()) == Some(window_id.clone()))
                     .then(|| window.clone())
@@ -784,8 +974,9 @@ impl WaylandFrontend {
             let Some(window) = window else {
                 continue;
             };
-            // Fullscreen/maximized windows temporarily overlay their retained
-            // tree node. Exiting that state returns them to the next arrangement.
+            // Fullscreen and exact-geometry windows temporarily overlay their
+            // retained node. True-maximized scrolling columns remain normal
+            // participants in this placement pass.
             if self.window_has_constrained_state(&window) {
                 continue;
             }
@@ -795,14 +986,24 @@ impl WaylandFrontend {
             let target = frame;
             let previous = self.window_geometry_target(&window);
             if let Some(managed) = ManagedWindow::new(&window) {
-                managed.prepare_tiled_geometry(target, previous.size != target.size);
+                managed.prepare_tiled_geometry(
+                    target,
+                    previous.size != target.size,
+                    layout_maximized,
+                );
             }
             self.set_window_geometry_target_with_authority(
                 &window,
                 target,
                 WindowGeometryAuthority::Layout,
             );
-            changed |= previous != target;
+            if previous != target {
+                changed = true;
+                changed_parents.push(window);
+            }
+        }
+        for parent in changed_parents {
+            changed |= self.reconcile_xdg_transient_descendant_placements(&parent);
         }
         changed
     }
@@ -845,12 +1046,14 @@ impl WaylandFrontend {
                 (
                     output.id,
                     self.maximize_work_area(Some(&output.output), output.logical_geometry),
-                    scrolling_layout_axis(output.transform),
+                    self.scrolling_layout_axis_for_output(output),
                 )
             })
             .collect::<Vec<_>>();
         for (output, work_area, axis) in contexts {
             for workspace in 1..=workspace_count {
+                self.window_layout
+                    .set_maximize_area(LayoutSpace::new(output, workspace), work_area);
                 self.window_layout.prepare_arrange(
                     LayoutSpace::new(output, workspace),
                     work_area,
@@ -896,31 +1099,26 @@ impl WaylandFrontend {
 
     fn restore_stacking_geometries(&mut self) {
         self.window_layout.clear();
-        let restores = std::mem::take(&mut self.layout_restore_geometries);
-        for (window_id, saved_restore) in restores {
-            let window = self.space.elements().find_map(|window| {
-                (self.window_root_surface(window).map(|root| root.id()) == Some(window_id.clone()))
-                    .then(|| window.clone())
-            });
-            let Some(window) = window else {
+        let windows = self
+            .space
+            .elements()
+            .filter_map(|window| Some((window.clone(), self.window_root_surface(window)?.id())))
+            .collect::<Vec<_>>();
+        for (window, window_id) in windows {
+            let Some(saved_restore) = self
+                .window_record_for_surface_mut(&window_id)
+                .and_then(|record| record.layout_restore_geometry.take())
+            else {
                 continue;
             };
             let restore =
                 visible_stacking_restore(saved_restore, self.window_geometry_target(&window));
             if self.window_has_constrained_state(&window) {
-                self.restore_window_geometries
-                    .insert(window_id.clone(), restore);
-                #[cfg(feature = "flutter")]
-                {
-                    if let Some(shell_restore) =
-                        self.shell_maximize_restore_geometries.get_mut(&window_id)
-                    {
-                        *shell_restore = restore;
-                    }
-                    if let Some(shell_restore) =
-                        self.shell_fullscreen_restore_geometries.get_mut(&window_id)
-                    {
-                        *shell_restore = restore;
+                if let Some(record) = self.window_record_for_surface_mut(&window_id) {
+                    record.restore_geometry = Some(restore);
+                    #[cfg(feature = "flutter")]
+                    if let Some(presentation) = record.shell_presentation.as_mut() {
+                        presentation.update_normal_geometry(restore);
                     }
                 }
                 continue;
@@ -935,8 +1133,8 @@ impl WaylandFrontend {
     fn restore_detached_window_geometry(&mut self, window: &Window, window_id: &ObjectId) {
         let current = self.window_geometry_target(window);
         let mut restore = self
-            .layout_restore_geometries
-            .remove(window_id)
+            .window_record_for_surface_mut(window_id)
+            .and_then(|record| record.layout_restore_geometry.take())
             .map(|saved| visible_stacking_restore(saved, current))
             .unwrap_or(current);
         let (minimum, maximum) = self.window_size_constraints(window);
@@ -955,7 +1153,7 @@ impl WaylandFrontend {
             return false;
         };
         #[cfg(feature = "flutter")]
-        let minimized = self.minimized_windows.contains(&root.id());
+        let minimized = self.surface_is_minimized(&root.id());
         #[cfg(not(feature = "flutter"))]
         let minimized = false;
         #[cfg(feature = "flutter")]
@@ -965,6 +1163,7 @@ impl WaylandFrontend {
         let Some(facts) = ManagedWindow::new(window).map(|window| window.facts()) else {
             return false;
         };
+        let already_managed = self.window_layout.contains(&root.id());
         LayoutWindowProperties {
             alive: root.is_alive(),
             transient: self.window_has_transient_parent(window),
@@ -972,8 +1171,9 @@ impl WaylandFrontend {
             override_redirect: facts.override_redirect,
             minimized,
             pinned,
+            rigid_size: has_rigid_dimension(facts.minimum_size, facts.maximum_size),
         }
-        .is_tiling_candidate()
+        .is_tiling_candidate(already_managed)
     }
 
     pub(crate) fn window_size_constraints(
@@ -989,18 +1189,71 @@ impl WaylandFrontend {
         )
     }
 
+    fn should_adopt_scrolling_maximize(&self, window: &Window) -> bool {
+        if self.window_layout.kind() != WindowLayoutKind::Scrolling {
+            return false;
+        }
+        let client_maximized =
+            ManagedWindow::new(window).is_some_and(|window| window.facts().client_state.maximized);
+        #[cfg(feature = "flutter")]
+        let shell_maximized = self.window_root_surface(window).is_some_and(|root| {
+            self.window_record_for_surface(&root.id())
+                .and_then(|record| record.shell_presentation)
+                .is_some_and(ShellWindowPresentation::has_maximized_underlay)
+        });
+        #[cfg(not(feature = "flutter"))]
+        let shell_maximized = false;
+        client_maximized || shell_maximized
+    }
+
+    fn adopt_scrolling_maximize(&mut self, window: &ObjectId) -> bool {
+        let changed = self.window_layout.set_maximized(window, true);
+        if !changed && !self.window_layout.is_maximized(window) {
+            return false;
+        }
+        #[cfg(feature = "flutter")]
+        let removed_shell_overlay = match self
+            .window_record_for_surface_mut(window)
+            .and_then(|record| record.shell_presentation.take())
+        {
+            Some(ShellWindowPresentation::Maximized { .. }) => true,
+            Some(ShellWindowPresentation::Fullscreen {
+                return_geometry,
+                underlay: ShellFullscreenUnderlay::Maximized { normal_geometry },
+            }) => {
+                self.window_record_for_surface_mut(window)
+                    .expect("managed window has no registry record")
+                    .shell_presentation = Some(ShellWindowPresentation::Fullscreen {
+                    return_geometry,
+                    underlay: ShellFullscreenUnderlay::LayoutMaximized { normal_geometry },
+                });
+                true
+            }
+            Some(presentation) => {
+                self.window_record_for_surface_mut(window)
+                    .expect("managed window has no registry record")
+                    .shell_presentation = Some(presentation);
+                false
+            }
+            None => false,
+        };
+        #[cfg(not(feature = "flutter"))]
+        let removed_shell_overlay = false;
+        changed || removed_shell_overlay
+    }
+
     fn window_has_constrained_state(&self, window: &Window) -> bool {
         #[cfg(feature = "flutter")]
         {
             let root = self.window_root_surface(window);
             if root.as_ref().is_some_and(|root| {
-                let id = root.id();
-                self.shell_fullscreen_locks.contains(&id)
-                    || self.shell_maximize_restore_geometries.contains_key(&id)
-                    || self
-                        .window_geometry_intents
-                        .get(&id)
-                        .is_some_and(|intent| intent.authority == WindowGeometryAuthority::Exact)
+                self.window_record_for_surface(&root.id())
+                    .is_some_and(|record| {
+                        record.shell_presentation.is_some()
+                            || record.geometry_intent.is_some_and(|intent| {
+                                intent.authority == WindowGeometryAuthority::Exact
+                            })
+                    })
             }) {
                 return true;
             }
@@ -1018,16 +1271,14 @@ impl WaylandFrontend {
         };
         #[cfg(feature = "flutter")]
         if let Some(restore) = self
-            .shell_maximize_restore_geometries
-            .get(&root.id())
-            .or_else(|| self.shell_fullscreen_restore_geometries.get(&root.id()))
-            .copied()
+            .window_record_for_surface(&root.id())
+            .and_then(|record| record.shell_presentation)
+            .map(ShellWindowPresentation::normal_geometry)
         {
             return restore;
         }
-        self.restore_window_geometries
-            .get(&root.id())
-            .copied()
+        self.window_record_for_surface(&root.id())
+            .and_then(|record| record.restore_geometry)
             .unwrap_or(fallback)
     }
 
@@ -1125,8 +1376,9 @@ impl WaylandFrontend {
                     output: space.output,
                     workspace: space.workspace,
                 };
-                self.minimized_window_outputs.remove(&stable_id);
-                changed |= self.window_workspaces.insert(stable_id, location) != Some(location);
+                let record = self.window_registry.ensure(WindowId::new(stable_id));
+                record.minimized_output = None;
+                changed |= record.workspace.replace(location) != Some(location);
             }
             return changed;
         }
@@ -1145,17 +1397,27 @@ struct LayoutWindowProperties {
     override_redirect: bool,
     minimized: bool,
     pinned: bool,
+    rigid_size: bool,
 }
 
 impl LayoutWindowProperties {
-    fn is_tiling_candidate(self) -> bool {
+    fn is_tiling_candidate(self, already_managed: bool) -> bool {
         self.alive
             && !self.transient
             && !self.auxiliary
             && !self.override_redirect
             && !self.minimized
             && !self.pinned
+            // Dialogs commonly advertise rigid constraints before their first
+            // layout enrollment. Once a regular toplevel owns a leaf, later
+            // hint churn must not let it escape and re-enter the tree.
+            && (!self.rigid_size || already_managed)
     }
+}
+
+fn has_rigid_dimension(minimum: Size<i32, Logical>, maximum: Size<i32, Logical>) -> bool {
+    let rigid = |minimum: i32, maximum: i32| minimum > 0 && maximum > 0 && maximum <= minimum;
+    rigid(minimum.w, maximum.w) || rigid(minimum.h, maximum.h)
 }
 
 fn layout_drop_distance(geometry: Rectangle<i32, Logical>, location: Point<i32, Logical>) -> f64 {
@@ -1378,14 +1640,55 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "flutter")]
+    #[test]
+    fn mouse_wheel_scrolling_delta_applies_speed_and_direction() {
+        assert_eq!(
+            mouse_wheel_scrolling_layout_delta(
+                -15.0,
+                1_000,
+                10,
+                1.0,
+                ScrollingLayoutWheelUpDirection::Left,
+            ),
+            610.0
+        );
+        assert_eq!(
+            mouse_wheel_scrolling_layout_delta(
+                -15.0,
+                1_000,
+                10,
+                2.0,
+                ScrollingLayoutWheelUpDirection::Right,
+            ),
+            -1_220.0
+        );
+        assert_eq!(
+            mouse_wheel_scrolling_layout_delta(
+                7.5,
+                1_000,
+                10,
+                0.5,
+                ScrollingLayoutWheelUpDirection::Left,
+            ),
+            -152.5
+        );
+    }
+
     #[test]
     fn quarter_turned_outputs_use_the_vertical_scrolling_axis() {
         assert_eq!(
-            scrolling_layout_axis(super::super::OutputTransform::Normal),
+            scrolling_layout_axis(
+                ScrollingLayoutAxis::Auto,
+                super::super::OutputTransform::Normal,
+            ),
             LayoutAxis::Horizontal
         );
         assert_eq!(
-            scrolling_layout_axis(super::super::OutputTransform::Rotate180),
+            scrolling_layout_axis(
+                ScrollingLayoutAxis::Auto,
+                super::super::OutputTransform::Rotate180,
+            ),
             LayoutAxis::Horizontal
         );
         for transform in [
@@ -1394,12 +1697,33 @@ mod tests {
             super::super::OutputTransform::Flipped90,
             super::super::OutputTransform::Flipped270,
         ] {
-            assert_eq!(scrolling_layout_axis(transform), LayoutAxis::Vertical);
+            assert_eq!(
+                scrolling_layout_axis(ScrollingLayoutAxis::Auto, transform),
+                LayoutAxis::Vertical,
+            );
         }
     }
 
     #[test]
-    fn every_regular_toplevel_uses_the_managed_layout_path() {
+    fn explicit_scrolling_axis_overrides_the_output_transform() {
+        assert_eq!(
+            scrolling_layout_axis(
+                ScrollingLayoutAxis::Horizontal,
+                super::super::OutputTransform::Rotate90,
+            ),
+            LayoutAxis::Horizontal,
+        );
+        assert_eq!(
+            scrolling_layout_axis(
+                ScrollingLayoutAxis::Vertical,
+                super::super::OutputTransform::Normal,
+            ),
+            LayoutAxis::Vertical,
+        );
+    }
+
+    #[test]
+    fn only_regular_resizable_toplevels_enter_managed_layouts() {
         let regular = LayoutWindowProperties {
             alive: true,
             transient: false,
@@ -1407,28 +1731,56 @@ mod tests {
             override_redirect: false,
             minimized: false,
             pinned: false,
+            rigid_size: false,
         };
-        assert!(regular.is_tiling_candidate());
+        assert!(regular.is_tiling_candidate(false));
+        assert!(
+            !LayoutWindowProperties {
+                rigid_size: true,
+                ..regular
+            }
+            .is_tiling_candidate(false)
+        );
+        assert!(
+            LayoutWindowProperties {
+                rigid_size: true,
+                ..regular
+            }
+            .is_tiling_candidate(true)
+        );
         assert!(
             !LayoutWindowProperties {
                 auxiliary: true,
                 ..regular
             }
-            .is_tiling_candidate()
+            .is_tiling_candidate(false)
         );
         assert!(
             !LayoutWindowProperties {
                 transient: true,
                 ..regular
             }
-            .is_tiling_candidate()
+            .is_tiling_candidate(false)
         );
         assert!(
             !LayoutWindowProperties {
                 pinned: true,
                 ..regular
             }
-            .is_tiling_candidate()
+            .is_tiling_candidate(false)
         );
+
+        assert!(has_rigid_dimension(
+            Size::from((420, 300)),
+            Size::from((420, 300))
+        ));
+        assert!(has_rigid_dimension(
+            Size::from((420, 0)),
+            Size::from((400, 0))
+        ));
+        assert!(!has_rigid_dimension(
+            Size::from((320, 200)),
+            Size::from((0, 1200))
+        ));
     }
 }

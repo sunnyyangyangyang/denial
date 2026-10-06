@@ -7,7 +7,7 @@ import 'package:denial_dart_shell/src/theme/shell_theme.dart';
 import 'package:denial_dart_shell/src/theme/glass_configuration.dart';
 import 'package:denial_dart_shell/src/widgets/app_icon.dart';
 import 'package:denial_dart_shell/src/widgets/launch_transition_layer.dart';
-import 'package:denial_dart_shell/src/widgets/window_hero.dart';
+import 'package:denial_dart_shell/src/widgets/window_surface.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

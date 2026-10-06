@@ -301,6 +301,31 @@ class ShellSettingsController extends Notifier<ShellSettings> {
     _update(state.copyWith(layout: state.layout.copyWith(windowLayout: value)));
   }
 
+  void setScrollingLayoutWheelSpeed(double value) {
+    _update(
+      state.copyWith(
+        layout: state.layout.copyWith(
+          scrollingLayoutWheelSpeed: value
+              .clamp(
+                scrollingLayoutWheelSpeedMinimum,
+                scrollingLayoutWheelSpeedMaximum,
+              )
+              .toDouble(),
+        ),
+      ),
+    );
+  }
+
+  void setScrollingLayoutWheelUpDirection(
+    ScrollingLayoutWheelUpDirection value,
+  ) {
+    _update(
+      state.copyWith(
+        layout: state.layout.copyWith(scrollingLayoutWheelUpDirection: value),
+      ),
+    );
+  }
+
   void setWorkspacesEnabled(bool value) {
     _update(
       state.copyWith(layout: state.layout.copyWith(workspacesEnabled: value)),

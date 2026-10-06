@@ -17,6 +17,7 @@ pub(super) struct FrameLoopContext<'a, 'event_loop> {
     pub(super) scanouts: &'a mut Vec<Scanout>,
     pub(super) restore_state: &'a mut RestoreState,
     pub(super) wayland: Option<wayland_frontend::WaylandFrontend>,
+    pub(super) gamma_control: Arc<Mutex<gamma_control::GammaController>>,
     #[cfg(feature = "flutter")]
     pub(super) flutter: Option<flutter_runtime::FlutterRuntime>,
     #[cfg(feature = "flutter")]
@@ -43,6 +44,7 @@ pub(super) fn run_frame_loop(
         scanouts,
         restore_state,
         wayland,
+        gamma_control,
         #[cfg(feature = "flutter")]
         mut flutter,
         #[cfg(feature = "flutter")]
@@ -71,6 +73,7 @@ pub(super) fn run_frame_loop(
         .unwrap_or_default();
     let mut events = RuntimeState {
         wayland,
+        gamma_control,
         native_escape_shortcut,
         #[cfg(feature = "flutter")]
         clipboard: Default::default(),
@@ -89,6 +92,16 @@ pub(super) fn run_frame_loop(
 
     for frame_number in 1..=frame_count {
         service_session_lifecycle(drm, scanouts, swapchain, event_loop, &mut events, None)?;
+        let gamma_reapply_requested = std::mem::take(&mut events.gamma_reapply_requested);
+        let force_gamma_reapply = events.scanout_rebased || gamma_reapply_requested;
+        gamma_control::synchronize_gamma_control(
+            drm,
+            scanouts,
+            &mut events,
+            &[],
+            force_gamma_reapply,
+        );
+        events.scanout_rebased = false;
         if let Some(reason) = events.lifecycle.shutdown_reason() {
             log_shutdown(reason);
             return Ok(swapchain.representative_framebuffer());

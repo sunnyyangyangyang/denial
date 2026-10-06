@@ -648,29 +648,6 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String frameAppRendering(String title) {
-    return 'APP · $title · RENDER';
-  }
-
-  @override
-  String frameAppWaiting(String title) {
-    return 'APP · $title · WAIT';
-  }
-
-  @override
-  String frameImportedStats(
-    String average,
-    String maximum,
-    int overBudget,
-    int samples,
-  ) {
-    return 'AVG $average  MAX $maximum  OVER $overBudget  N $samples';
-  }
-
-  @override
-  String get frameImportedStatsUnavailable => 'AVG --.-  MAX --.-  OVER -  N -';
-
-  @override
   String frameMilliseconds(String value) {
     return '~$value ms';
   }
@@ -1027,6 +1004,16 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String outputBrightnessSemantics(String outputName) {
     return '$outputName brightness';
+  }
+
+  @override
+  String outputSoftwareDimmingSemantics(String outputName) {
+    return '$outputName software dimming';
+  }
+
+  @override
+  String outputSoftwareDimmingUnavailable(String outputName) {
+    return '$outputName software dimming (unavailable)';
   }
 
   @override
@@ -1751,7 +1738,53 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsColorPickerInstructions =>
-      'Drag to choose a color. Use the arrow keys for fine adjustments.';
+      'Choose visually or enter exact color values.';
+
+  @override
+  String get settingsColorInputTitle => 'Color values';
+
+  @override
+  String get settingsColorInputRgb => 'RGB';
+
+  @override
+  String get settingsColorInputHsl => 'HSL';
+
+  @override
+  String get settingsColorInputHex => 'HEX';
+
+  @override
+  String get settingsColorInputRed => 'Red';
+
+  @override
+  String get settingsColorInputGreen => 'Green';
+
+  @override
+  String get settingsColorInputBlue => 'Blue';
+
+  @override
+  String get settingsColorInputHue => 'Hue';
+
+  @override
+  String get settingsColorInputSaturation => 'Saturation';
+
+  @override
+  String get settingsColorInputLightness => 'Lightness';
+
+  @override
+  String get settingsColorInputHexValue => 'Hex color';
+
+  @override
+  String get settingsColorInputNudgeHint =>
+      'Use ↑↓ to nudge · Hold Shift for 10';
+
+  @override
+  String get settingsColorInputRgbError => 'Use RGB values from 0 to 255.';
+
+  @override
+  String get settingsColorInputHslError => 'Use H 0–360 and S/L 0–100.';
+
+  @override
+  String get settingsColorInputHexError => 'Use 3 or 6 hex digits.';
 
   @override
   String get settingsColorPickerReset => 'Reset';
@@ -1871,6 +1904,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsDisplayArrangementTitle => 'Monitor configuration';
 
   @override
+  String get settingsDisplayEnabled => 'Use this display';
+
+  @override
+  String get settingsDisplayEnabledDescription =>
+      'Include this monitor in the desktop. At least one display must remain enabled.';
+
+  @override
   String get settingsDisplayBrightnessDescription =>
       'Adjust the main display brightness.';
 
@@ -1915,7 +1955,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsDisplayPrimaryHint =>
-      'Shell surfaces open on the primary display. Automatic uses the connected display with the highest refresh rate.';
+      'Shell surfaces open on the primary display. Automatic uses the enabled display with the highest refresh rate.';
 
   @override
   String get settingsDisplayRefreshRate => 'Refresh rate';
@@ -1930,13 +1970,30 @@ class AppLocalizationsEn extends AppLocalizations {
   String get settingsDisplayRotationNormal => 'Landscape';
 
   @override
-  String get settingsDisplayRotation90 => '90° clockwise';
+  String get settingsDisplayRotation90 => '90° counterclockwise';
 
   @override
   String get settingsDisplayRotation180 => 'Upside down';
 
   @override
-  String get settingsDisplayRotation270 => '90° counterclockwise';
+  String get settingsDisplayRotation270 => '90° clockwise';
+
+  @override
+  String get settingsDisplayScrollingLayoutAxis => 'Scrolling layout axis';
+
+  @override
+  String get settingsDisplayScrollingLayoutAxisDescription =>
+      'Choose how scrolling windows are arranged on this display.';
+
+  @override
+  String get settingsDisplayScrollingLayoutAxisAuto =>
+      'Automatic (follows rotation)';
+
+  @override
+  String get settingsDisplayScrollingLayoutAxisHorizontal => 'Horizontal';
+
+  @override
+  String get settingsDisplayScrollingLayoutAxisVertical => 'Vertical';
 
   @override
   String get settingsDisplayScale => 'Scale';
@@ -2544,7 +2601,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsWindowLayoutDescription =>
-      'Stacking lets windows overlap. Tiling divides the desktop dynamically. Scrolling follows focus along a strip that turns vertical with a quarter-turned monitor.';
+      'Stacking lets windows overlap. Tiling divides the desktop dynamically. Scrolling follows focus along a strip; its axis is configured per display and follows rotation by default.';
 
   @override
   String get settingsWindowLayoutDwindle => 'Tiling';
@@ -2557,6 +2614,25 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsWindowLayoutTitle => 'Window layout';
+
+  @override
+  String get settingsScrollingLayoutWheelTitle => 'Super + mouse wheel';
+
+  @override
+  String get settingsScrollingLayoutWheelDescription =>
+      'Hold Super and turn the mouse wheel to scroll the window strip.';
+
+  @override
+  String get settingsScrollingLayoutWheelSpeed => 'Wheel speed';
+
+  @override
+  String get settingsScrollingLayoutWheelUpDirection => 'Wheel up moves';
+
+  @override
+  String get settingsScrollingLayoutWheelUpLeft => 'Left';
+
+  @override
+  String get settingsScrollingLayoutWheelUpRight => 'Right';
 
   @override
   String get settingsWorkspacesTitle => 'Workspaces';
@@ -3440,6 +3516,15 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get wallpaperFinding => 'Finding wallpapers…';
+
+  @override
+  String wallpaperFolderHint(String directory) {
+    return 'Add your own wallpapers to $directory.';
+  }
+
+  @override
+  String get wallpaperImageServerUnavailable =>
+      'Online wallpapers are unavailable. Local wallpapers still work.';
 
   @override
   String get wallpaperMobileBackToSelection => 'Back to wallpaper selection';

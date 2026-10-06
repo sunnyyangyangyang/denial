@@ -8,6 +8,7 @@ enum DenialWindowContentKind {
   layerShellBottom,
   layerShellTop,
   layerShellOverlay,
+  popupSurface,
 }
 
 enum DenialSurfaceRole { root, subsurface, popup }
@@ -144,6 +145,7 @@ class DenialWindow {
     required this.geometryHeight,
     required this.monitorId,
     this.workspaceId = 1,
+    this.transientParentObjectId,
     this.minimized = false,
     this.fullscreen = false,
     this.maximized = false,
@@ -187,6 +189,7 @@ class DenialWindow {
   final double geometryHeight;
   final int monitorId;
   final int workspaceId;
+  final int? transientParentObjectId;
   final bool minimized;
   final bool fullscreen;
   final bool maximized;
@@ -215,8 +218,12 @@ class DenialWindow {
     DenialWindowContentKind.layerShellTop ||
     DenialWindowContentKind.layerShellOverlay => true,
     DenialWindowContentKind.surfaceTree ||
-    DenialWindowContentKind.localFlutter => false,
+    DenialWindowContentKind.localFlutter ||
+    DenialWindowContentKind.popupSurface => false,
   };
+
+  bool get isPopupSurface =>
+      contentKind == DenialWindowContentKind.popupSurface;
 
   bool get isHome => appId == 'denia-home' || title == 'denia-home';
 
@@ -224,10 +231,12 @@ class DenialWindow {
       appId.startsWith('denia-systemui') || title.startsWith('denia-systemui');
 
   bool get isInputMethodPopup =>
-      appId == 'denia-systemui-input-method' ||
-      title == 'denia-systemui-input-method';
+      isPopupSurface &&
+      (appId == 'denia-systemui-input-method' ||
+          title == 'denia-systemui-input-method');
 
-  bool get isUserApp => !isLayerShell && !isHome && !isSystemUi;
+  bool get isUserApp =>
+      !isLayerShell && !isPopupSurface && !isHome && !isSystemUi;
 
   /// Whether this scene entry should play Denial's one-time window entrance.
   ///
@@ -358,6 +367,7 @@ class DenialWindow {
         other.appId == appId &&
         other.monitorId == monitorId &&
         other.workspaceId == workspaceId &&
+        other.transientParentObjectId == transientParentObjectId &&
         other.minimized == minimized &&
         other.fullscreen == fullscreen &&
         other.maximized == maximized &&
@@ -396,6 +406,7 @@ class DenialWindow {
         other.geometryHeight == geometryHeight &&
         other.monitorId == monitorId &&
         other.workspaceId == workspaceId &&
+        other.transientParentObjectId == transientParentObjectId &&
         other.minimized == minimized &&
         other.fullscreen == fullscreen &&
         other.maximized == maximized &&
@@ -447,6 +458,7 @@ class DenialWindow {
     geometryHeight,
     monitorId,
     workspaceId,
+    transientParentObjectId,
     minimized,
     fullscreen,
     maximized,

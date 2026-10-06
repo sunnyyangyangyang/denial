@@ -45,11 +45,16 @@ enum MinimizedWindowPlacement { desktop, offscreen }
 /// Each value maps to a Rust `WindowLayout` implementation.
 enum DesktopWindowLayout { stacking, dwindle, scrolling }
 
+enum ScrollingLayoutWheelUpDirection { left, right }
+
 enum WorkspaceSwitchingOrientation { horizontal, vertical }
 
 const int minimumWorkspaceCount = 2;
 const int maximumWorkspaceCount = 9;
 const int defaultWorkspaceCount = 4;
+const double scrollingLayoutWheelSpeedMinimum = 0.25;
+const double scrollingLayoutWheelSpeedMaximum = 4;
+const double scrollingLayoutWheelSpeedDefault = 1;
 
 const double clipboardTrayMinimumExtent = 100;
 const double clipboardTrayMaximumExtent = 300;
@@ -262,6 +267,8 @@ class ShellAnimationSettings {
 class ShellLayoutSettings {
   const ShellLayoutSettings({
     this.windowLayout = DesktopWindowLayout.stacking,
+    this.scrollingLayoutWheelSpeed = scrollingLayoutWheelSpeedDefault,
+    this.scrollingLayoutWheelUpDirection = ScrollingLayoutWheelUpDirection.left,
     this.workspacesEnabled = false,
     this.workspaceCount = defaultWorkspaceCount,
     this.workspaceSwitchingOrientation =
@@ -276,6 +283,8 @@ class ShellLayoutSettings {
   });
 
   final DesktopWindowLayout windowLayout;
+  final double scrollingLayoutWheelSpeed;
+  final ScrollingLayoutWheelUpDirection scrollingLayoutWheelUpDirection;
   final bool workspacesEnabled;
   final int workspaceCount;
   final WorkspaceSwitchingOrientation workspaceSwitchingOrientation;
@@ -289,6 +298,8 @@ class ShellLayoutSettings {
 
   ShellLayoutSettings copyWith({
     DesktopWindowLayout? windowLayout,
+    double? scrollingLayoutWheelSpeed,
+    ScrollingLayoutWheelUpDirection? scrollingLayoutWheelUpDirection,
     bool? workspacesEnabled,
     int? workspaceCount,
     WorkspaceSwitchingOrientation? workspaceSwitchingOrientation,
@@ -303,6 +314,11 @@ class ShellLayoutSettings {
   }) {
     return ShellLayoutSettings(
       windowLayout: windowLayout ?? this.windowLayout,
+      scrollingLayoutWheelSpeed:
+          scrollingLayoutWheelSpeed ?? this.scrollingLayoutWheelSpeed,
+      scrollingLayoutWheelUpDirection:
+          scrollingLayoutWheelUpDirection ??
+          this.scrollingLayoutWheelUpDirection,
       workspacesEnabled: workspacesEnabled ?? this.workspacesEnabled,
       workspaceCount: workspaceCount ?? this.workspaceCount,
       workspaceSwitchingOrientation:
@@ -326,6 +342,9 @@ class ShellLayoutSettings {
   bool operator ==(Object other) {
     return other is ShellLayoutSettings &&
         other.windowLayout == windowLayout &&
+        other.scrollingLayoutWheelSpeed == scrollingLayoutWheelSpeed &&
+        other.scrollingLayoutWheelUpDirection ==
+            scrollingLayoutWheelUpDirection &&
         other.workspacesEnabled == workspacesEnabled &&
         other.workspaceCount == workspaceCount &&
         other.workspaceSwitchingOrientation == workspaceSwitchingOrientation &&
@@ -341,6 +360,8 @@ class ShellLayoutSettings {
   @override
   int get hashCode => Object.hash(
     windowLayout,
+    scrollingLayoutWheelSpeed,
+    scrollingLayoutWheelUpDirection,
     workspacesEnabled,
     workspaceCount,
     workspaceSwitchingOrientation,
@@ -825,7 +846,7 @@ class ShellSettings {
 
   // Blur levels are additive in schema 9. Keep emitting the derived legacy
   // sigma so older shells can read settings written by this version.
-  static const int schemaVersion = 27;
+  static const int schemaVersion = 28;
 
   final ShellLocalizationSettings localization;
   final ShellAppearanceSettings appearance;
@@ -946,6 +967,15 @@ class ShellSettings {
       final section = <String, Object?>{};
       if (layout.windowLayout != before.windowLayout) {
         section['windowLayout'] = layout.windowLayout.name;
+      }
+      if (layout.scrollingLayoutWheelSpeed !=
+          before.scrollingLayoutWheelSpeed) {
+        section['scrollingLayoutWheelSpeed'] = layout.scrollingLayoutWheelSpeed;
+      }
+      if (layout.scrollingLayoutWheelUpDirection !=
+          before.scrollingLayoutWheelUpDirection) {
+        section['scrollingLayoutWheelUpDirection'] =
+            layout.scrollingLayoutWheelUpDirection.name;
       }
       if (layout.workspacesEnabled != before.workspacesEnabled) {
         section['workspacesEnabled'] = layout.workspacesEnabled;
@@ -1109,6 +1139,9 @@ class ShellSettings {
       },
       'layout': <String, Object?>{
         'windowLayout': layout.windowLayout.name,
+        'scrollingLayoutWheelSpeed': layout.scrollingLayoutWheelSpeed,
+        'scrollingLayoutWheelUpDirection':
+            layout.scrollingLayoutWheelUpDirection.name,
         'workspacesEnabled': layout.workspacesEnabled,
         'workspaceCount': layout.workspaceCount,
         'workspaceSwitchingOrientation':
@@ -1340,6 +1373,17 @@ class ShellSettings {
           DesktopWindowLayout.values,
           layoutJson['windowLayout'],
           defaults.layout.windowLayout,
+        ),
+        scrollingLayoutWheelSpeed: _number(
+          layoutJson['scrollingLayoutWheelSpeed'],
+          defaults.layout.scrollingLayoutWheelSpeed,
+          scrollingLayoutWheelSpeedMinimum,
+          scrollingLayoutWheelSpeedMaximum,
+        ),
+        scrollingLayoutWheelUpDirection: _enumValue(
+          ScrollingLayoutWheelUpDirection.values,
+          layoutJson['scrollingLayoutWheelUpDirection'],
+          defaults.layout.scrollingLayoutWheelUpDirection,
         ),
         workspacesEnabled: layoutJson['workspacesEnabled'] is bool
             ? layoutJson['workspacesEnabled'] as bool

@@ -3,7 +3,9 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../desktop/desktop_shell.dart';
+import '../../desktop/desktop_workspace.dart';
 import '../../diagnostics/glass_benchmark.dart';
+import '../../state/desktop_window_switcher.dart';
 import '../../wallpaper/state/wallpaper_controller.dart';
 import '../../wallpaper/widgets/mobile_wallpaper_selector_layer.dart';
 import '../../widgets/connectivity/bluetooth_detail_surface.dart';
@@ -48,5 +50,7 @@ Widget _buildPairingSurface(BuildContext context, VoidCallback close) {
 }
 
 void _closeFeatureSurfaces(WidgetRef ref) {
+  ref.read(desktopWindowSwitcherProvider.notifier).cancel();
+  ref.read(desktopWorkspaceProvider.notifier).closeOverview();
   ref.read(wallpaperControllerProvider.notifier).closeSelector();
 }

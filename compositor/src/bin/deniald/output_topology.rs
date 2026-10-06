@@ -1,6 +1,35 @@
 //! Connector discovery, output-control validation, and topology projection.
 
 use super::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum ScrollingLayoutAxis {
+    #[default]
+    Auto,
+    Horizontal,
+    Vertical,
+}
+
+impl ScrollingLayoutAxis {
+    pub(super) const fn settings_name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Horizontal => "horizontal",
+            Self::Vertical => "vertical",
+        }
+    }
+
+    pub(super) fn from_settings_name(name: &str) -> Option<Self> {
+        match name {
+            "auto" => Some(Self::Auto),
+            "horizontal" => Some(Self::Horizontal),
+            "vertical" => Some(Self::Vertical),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct OutputModePreference {
@@ -16,6 +45,7 @@ pub(super) struct RuntimeOutputConfiguration {
     pub(super) modes: BTreeMap<String, OutputModePreference>,
     pub(super) scales_120: BTreeMap<String, u32>,
     pub(super) transforms: BTreeMap<String, OutputTransform>,
+    pub(super) scrolling_layout_axes: BTreeMap<String, ScrollingLayoutAxis>,
     /// Transient device rotation from iio-sensor-proxy. `transforms` remains
     /// the persistent panel-mount baseline.
     pub(super) sensor_rotation: OutputTransform,
@@ -60,6 +90,7 @@ impl RuntimeOutputConfiguration {
             modes,
             scales_120: options.scales_120.clone(),
             transforms: options.transforms.clone(),
+            scrolling_layout_axes: options.scrolling_layout_axes.clone(),
             sensor_rotation: OutputTransform::Normal,
             vrr_outputs: options.vrr_outputs.clone(),
             disabled_outputs: options.disabled_outputs.clone(),
@@ -89,6 +120,13 @@ impl RuntimeOutputConfiguration {
         } else {
             effective
         }
+    }
+
+    pub(super) fn scrolling_layout_axis(&self, name: &str) -> ScrollingLayoutAxis {
+        self.scrolling_layout_axes
+            .get(name)
+            .copied()
+            .unwrap_or_default()
     }
 }
 
@@ -331,6 +369,7 @@ pub(super) fn output_control_state(
             physical_height_mm,
             scale: f64::from(scale_120) / f64::from(SCALE_BASE),
             transform: output_transform_name(transform),
+            scrolling_layout_axis: configuration.scrolling_layout_axis(&name),
             adaptive_sync_supported,
             adaptive_sync,
             current_mode,
@@ -665,6 +704,13 @@ pub(super) fn configuration_from_output_request(
             name.clone(),
             current.baseline_transform(&name, effective_transform),
         );
+        if let Some(axis) = output.scrolling_layout_axis {
+            if axis == ScrollingLayoutAxis::Auto {
+                staged.scrolling_layout_axes.remove(&name);
+            } else {
+                staged.scrolling_layout_axes.insert(name.clone(), axis);
+            }
+        }
         if output.enabled {
             staged.disabled_outputs.remove(&name);
             power.insert(

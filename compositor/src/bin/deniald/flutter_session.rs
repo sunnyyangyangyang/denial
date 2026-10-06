@@ -247,14 +247,16 @@ pub(super) fn reload_flutter_runtime(
         .map_err(|error| format!("Flutter shutdown before refresh failed: {error}"))?;
     events.flutter_events.clear();
 
-    *flutter = Some(flutter_launcher.start_with_targets(
+    let mut replacement = flutter_launcher.start_with_targets(
         renderer,
         output_swapchains,
         scanouts,
         &snapshot,
         &atlas,
         Some(prepared),
-    )?);
+    )?;
+    events.install_workspace_snapshot(&mut replacement)?;
+    *flutter = Some(replacement);
     events.begin_replacement_flutter_generation(swapchain.desktop_size());
     Ok(FlutterReloadOutcome::Replaced)
 }

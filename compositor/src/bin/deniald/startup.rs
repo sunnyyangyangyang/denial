@@ -258,7 +258,9 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
             session.clone(),
             &seat_name,
             drm_fd.clone(),
+            options.xwayland,
             options.work_area.clone(),
+            output_configuration.scrolling_layout_axes.clone(),
             settings
                 .take()
                 .expect("Wayland settings were loaded before frontend startup"),
@@ -541,6 +543,9 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                         ControlEvent::SystemControl(request) => {
                             state.pending_system_controls.push_back(request);
                         }
+                        ControlEvent::SoftwareDimming(request) => {
+                            state.pending_software_dimming.push_back(request);
+                        }
                         ControlEvent::UiDevelopment(request) => {
                             state.pending_ui_development.push_back(request);
                         }
@@ -583,7 +588,9 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
             wayland
                 .as_ref()
                 .map(|frontend| frontend.socket_name().to_os_string()),
-            wayland.as_ref().map(|frontend| frontend.xdisplay_name()),
+            wayland
+                .as_ref()
+                .and_then(|frontend| frontend.xdisplay_name()),
             output_control
                 .as_ref()
                 .map(OutputControlServer::socket_path_os_string),
@@ -616,6 +623,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
+    let gamma_control = Arc::new(Mutex::new(gamma_control::GammaController::default()));
     let mut graphical_session_started = false;
     let runtime_outcome = catch_unwind(AssertUnwindSafe(|| -> Result<_, Box<dyn Error>> {
         for scanout in &kms.scanouts {
@@ -633,7 +641,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
         if let Some(frontend) = wayland.as_ref() {
             match publish_session_activation_environment(
                 frontend.socket_name(),
-                frontend.xdisplay_name().as_os_str(),
+                frontend.xdisplay_name().as_deref(),
                 #[cfg(feature = "flutter")]
                 output_control
                     .as_ref()
@@ -679,6 +687,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                         .publisher(),
                     portal_ipc: portal_ipc_server.as_ref().map(PortalIpcServer::publisher),
                     wayland,
+                    gamma_control: Arc::clone(&gamma_control),
                     flutter: &mut flutter,
                     flutter_launcher: flutter_launcher
                         .as_mut()
@@ -703,6 +712,7 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
                 scanouts: &mut kms.scanouts,
                 restore_state: &mut restore_state,
                 wayland,
+                gamma_control: Arc::clone(&gamma_control),
                 #[cfg(feature = "flutter")]
                 flutter: flutter.take(),
                 #[cfg(feature = "flutter")]
@@ -746,6 +756,14 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
         .copied()
         .unwrap_or_else(|| swapchains.representative_framebuffer());
 
+    let gamma_restore_failures = if kms.drm.is_active() {
+        gamma_control
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .restore_all(&kms.drm)
+    } else {
+        Vec::new()
+    };
     if runtime_limit == RuntimeLimit::UntilLogout {
         // This is the last-resort teardown boundary for a real login session.
         // The orderly path already drains pending flips and releases master,
@@ -758,7 +776,8 @@ pub(super) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     }
     let restore = kms.restore_once(&restore_state, current_fb);
     let restored = restore.restored;
-    let restore_failures = restore.failures;
+    let mut restore_failures = restore.failures;
+    restore_failures.extend(gamma_restore_failures);
 
     if graphical_session_started && let Err(error) = stop_systemd_graphical_session() {
         warn!(%error, "could not stop the Denial graphical-session target");

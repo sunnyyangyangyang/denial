@@ -9,6 +9,7 @@ use denial_core::topology::OutputId;
 
 use super::super::settings::WorkspaceSettings;
 use super::WaylandFrontend;
+use super::window_registry::WindowId;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct WorkspaceLocation {
@@ -38,7 +39,7 @@ impl WaylandFrontend {
     }
 
     pub(super) fn workspace_location(&self, window_id: u64) -> Option<WorkspaceLocation> {
-        self.window_workspaces.get(&window_id).copied()
+        self.window_record(window_id)?.workspace
     }
 
     pub(super) fn reconcile_workspace_assignment(
@@ -50,27 +51,22 @@ impl WaylandFrontend {
         if !self.outputs.iter().any(|candidate| candidate.id == output) {
             return None;
         }
+        let active = self.active_workspace(output);
+        let record = self.window_registry.ensure(WindowId::new(window_id));
         if minimized {
-            if let Some(previous) = self.window_workspaces.remove(&window_id) {
-                self.minimized_window_outputs
-                    .insert(window_id, previous.output);
-            } else {
-                self.minimized_window_outputs
-                    .entry(window_id)
-                    .or_insert(output);
-            }
+            let preferred = record
+                .workspace
+                .take()
+                .map_or(output, |location| location.output);
+            record.minimized_output.get_or_insert(preferred);
             return None;
         }
 
-        self.minimized_window_outputs.remove(&window_id);
-        let active = self.active_workspace(output);
-        let location = self
-            .window_workspaces
-            .entry(window_id)
-            .or_insert(WorkspaceLocation {
-                output,
-                workspace: active,
-            });
+        record.minimized_output = None;
+        let location = record.workspace.get_or_insert(WorkspaceLocation {
+            output,
+            workspace: active,
+        });
         // Crossing an output boundary always joins the destination's visible
         // workspace. Geometry movement within one output retains membership.
         if location.output != output {
@@ -83,24 +79,32 @@ impl WaylandFrontend {
     }
 
     pub(super) fn mark_window_minimized(&mut self, window_id: u64, fallback: OutputId) {
+        let id = WindowId::new(window_id);
         self.workspace_focus_history
             .retain(|_, focused| *focused != window_id);
-        let preferred = self
-            .window_workspaces
-            .remove(&window_id)
+        let record = self.window_registry.ensure(id);
+        let preferred = record
+            .workspace
+            .take()
             .map(|location| location.output)
             .unwrap_or(fallback);
-        self.minimized_window_outputs.insert(window_id, preferred);
+        record.minimized_output = Some(preferred);
     }
 
     pub(super) fn restore_window_workspace(&mut self, window_id: u64) -> Option<WorkspaceLocation> {
-        if let Some(location) = self.window_workspaces.get(&window_id).copied() {
-            self.minimized_window_outputs.remove(&window_id);
+        let id = WindowId::new(window_id);
+        if let Some(location) = self
+            .window_registry
+            .get(id)
+            .and_then(|record| record.workspace)
+        {
+            self.window_registry.ensure(id).minimized_output = None;
             return Some(location);
         }
         let output = self
-            .minimized_window_outputs
-            .remove(&window_id)
+            .window_registry
+            .get_mut(id)
+            .and_then(|record| record.minimized_output.take())
             .filter(|output| self.outputs.iter().any(|candidate| candidate.id == *output))
             .or(self.ticker_output)
             .or_else(|| self.outputs.first().map(|output| output.id))?;
@@ -108,15 +112,8 @@ impl WaylandFrontend {
             output,
             workspace: self.active_workspace(output),
         };
-        self.window_workspaces.insert(window_id, location);
+        self.window_registry.ensure(id).workspace = Some(location);
         Some(location)
-    }
-
-    pub(super) fn forget_window_workspace(&mut self, window_id: u64) {
-        self.window_workspaces.remove(&window_id);
-        self.minimized_window_outputs.remove(&window_id);
-        self.workspace_focus_history
-            .retain(|_, focused| *focused != window_id);
     }
 
     pub(super) fn record_workspace_focus(&mut self, window_id: u64) {
@@ -137,8 +134,8 @@ impl WaylandFrontend {
         if !self.workspaces_enabled {
             return true;
         }
-        self.window_workspaces
-            .get(&window_id)
+        self.window_record(window_id)
+            .and_then(|record| record.workspace)
             .is_some_and(|location| location.workspace == self.active_workspace(location.output))
     }
 
@@ -185,9 +182,10 @@ impl WaylandFrontend {
         {
             return None;
         }
+        let id = WindowId::new(window_id);
         self.workspace_focus_history
             .retain(|_, focused| *focused != window_id);
-        let location = self.window_workspaces.get_mut(&window_id)?;
+        let location = self.window_registry.get_mut(id)?.workspace.as_mut()?;
         if let Some(output) = output {
             location.output = output;
         }
@@ -211,12 +209,14 @@ impl WaylandFrontend {
                 1
             };
         }
-        for location in self.window_workspaces.values_mut() {
-            location.workspace = if settings.enabled {
-                location.workspace.min(settings.count)
-            } else {
-                1
-            };
+        for record in self.window_registry.values_mut() {
+            if let Some(location) = record.workspace.as_mut() {
+                location.workspace = if settings.enabled {
+                    location.workspace.min(settings.count)
+                } else {
+                    1
+                };
+            }
         }
         self.invalidate_idle_inhibition();
         true
@@ -262,8 +262,10 @@ impl WaylandFrontend {
             self.active_workspaces.entry(*output).or_insert(1);
         }
         let Some(fallback) = fallback else {
-            self.window_workspaces.clear();
-            self.minimized_window_outputs.clear();
+            for record in self.window_registry.values_mut() {
+                record.workspace = None;
+                record.minimized_output = None;
+            }
             self.workspace_focus_history.clear();
             return;
         };
@@ -272,14 +274,16 @@ impl WaylandFrontend {
                 .entry((fallback, workspace.min(self.workspace_count).max(1)))
                 .or_insert(window_id);
         }
-        for location in self.window_workspaces.values_mut() {
-            if !present.contains(&location.output) {
-                location.output = fallback;
+        for record in self.window_registry.values_mut() {
+            if let Some(location) = record.workspace.as_mut() {
+                if !present.contains(&location.output) {
+                    location.output = fallback;
+                }
+                location.workspace = location.workspace.min(self.workspace_count).max(1);
             }
-            location.workspace = location.workspace.min(self.workspace_count).max(1);
-        }
-        for output in self.minimized_window_outputs.values_mut() {
-            if !present.contains(output) {
+            if let Some(output) = record.minimized_output.as_mut()
+                && !present.contains(output)
+            {
                 *output = fallback;
             }
         }

@@ -123,6 +123,20 @@ class DenialBrightnessState {
   final bool completesRead;
 }
 
+class DenialSoftwareDimmingState {
+  const DenialSoftwareDimmingState({
+    required this.monitorId,
+    required this.level,
+    required this.supported,
+    this.completesRead = false,
+  });
+
+  final int monitorId;
+  final double level;
+  final bool supported;
+  final bool completesRead;
+}
+
 class DenialTextInputState {
   const DenialTextInputState({
     required this.active,
@@ -152,6 +166,7 @@ class DenialBridge {
   static const String _hapticsChannel = 'denial/haptics';
   static const String _audioChannel = 'denial/audio';
   static const String _brightnessChannel = 'denial/brightness';
+  static const String _softwareDimmingChannel = 'denial/software_dimming';
   static const String _idlePolicyChannel = 'denial/idle_policy';
   static const String _displayPowerChannel = 'denial/display_power';
   static const String _systemCommandChannel = 'denial/system_command';
@@ -162,6 +177,8 @@ class DenialBridge {
   static const String _audioStreamsStateChannel = 'denial/audio_streams_state';
   static const String _audioDevicesStateChannel = 'denial/audio_devices_state';
   static const String _brightnessStateChannel = 'denial/brightness_state';
+  static const String _softwareDimmingStateChannel =
+      'denial/software_dimming_state';
   static final Uint8List _hapticPrewarmPayload = Uint8List.fromList(const <int>[
     0,
   ]);
@@ -203,6 +220,10 @@ class DenialBridge {
       _handleBrightnessStateMessage,
     );
     ServicesBinding.instance.defaultBinaryMessenger.setMessageHandler(
+      _softwareDimmingStateChannel,
+      _handleSoftwareDimmingStateMessage,
+    );
+    ServicesBinding.instance.defaultBinaryMessenger.setMessageHandler(
       denialUiDevelopmentStateChannel,
       _handleUiDevelopmentStateMessage,
     );
@@ -228,6 +249,7 @@ class DenialBridge {
   _pendingShortcutValidationRequests = {};
   final Set<Completer<double?>> _pendingAudioReads = {};
   final Map<int, Set<Completer<double?>>> _pendingBrightnessReads = {};
+  final Map<int, Set<Completer<double?>>> _pendingSoftwareDimmingReads = {};
   final StreamController<DenialWindowEvent> _windowEvents =
       StreamController<DenialWindowEvent>.broadcast(sync: true);
   final StreamController<DenialShellActionEvent> _shellActions =
@@ -248,6 +270,8 @@ class DenialBridge {
       StreamController<List<DenialAudioDevice>>.broadcast(sync: true);
   final StreamController<DenialBrightnessState> _brightnessStates =
       StreamController<DenialBrightnessState>.broadcast(sync: true);
+  final StreamController<DenialSoftwareDimmingState> _softwareDimmingStates =
+      StreamController<DenialSoftwareDimmingState>.broadcast(sync: true);
   final StreamController<DesktopNotificationEvent> _notificationEvents =
       StreamController<DesktopNotificationEvent>.broadcast(sync: true);
   final StreamController<XEmbedTrayEvent> _xembedTrayEvents =
@@ -295,6 +319,8 @@ class DenialBridge {
       _audioDeviceStates.stream;
   Stream<DenialBrightnessState> get brightnessStates =>
       _brightnessStates.stream;
+  Stream<DenialSoftwareDimmingState> get softwareDimmingStates =>
+      _softwareDimmingStates.stream;
   Stream<DesktopNotificationEvent> get notificationEvents =>
       _notificationEvents.stream;
   Stream<XEmbedTrayEvent> get xembedTrayEvents => _xembedTrayEvents.stream;
@@ -535,6 +561,10 @@ class DenialBridge {
       null,
     );
     ServicesBinding.instance.defaultBinaryMessenger.setMessageHandler(
+      _softwareDimmingStateChannel,
+      null,
+    );
+    ServicesBinding.instance.defaultBinaryMessenger.setMessageHandler(
       denialUiDevelopmentStateChannel,
       null,
     );
@@ -595,6 +625,14 @@ class DenialBridge {
       }
     }
     _pendingBrightnessReads.clear();
+    for (final pending in _pendingSoftwareDimmingReads.values) {
+      for (final completer in pending) {
+        if (!completer.isCompleted) {
+          completer.complete(null);
+        }
+      }
+    }
+    _pendingSoftwareDimmingReads.clear();
     _onWindowsChanged = null;
     _onWindowSnapshot = null;
     _onWindowActivated = null;
@@ -608,6 +646,7 @@ class DenialBridge {
     unawaited(_audioStreamStates.close());
     unawaited(_audioDeviceStates.close());
     unawaited(_brightnessStates.close());
+    unawaited(_softwareDimmingStates.close());
     unawaited(_notificationEvents.close());
     unawaited(_xembedTrayEvents.close());
     unawaited(_uiDevelopmentStates.close());
@@ -1631,6 +1670,104 @@ class DenialBridge {
         ?.catchError((Object _) => null);
   }
 
+  Future<double?> readSoftwareDimmingLevel({required int monitorId}) async {
+    if (monitorId <= 0) return null;
+    if (!useControlSocket) {
+      return _readSoftwareDimmingLevelFromPlatform(monitorId);
+    }
+    try {
+      final result = await _sendControlRequest(
+        'software_dimming.get',
+        parameters: <String, Object>{'monitor_id': monitorId},
+      );
+      final returnedMonitor = result['monitor_id'];
+      final value = result['level'];
+      final supported = result['supported'];
+      if (returnedMonitor is! int || value is! num || supported is! bool) {
+        return null;
+      }
+      final level = value.toDouble().clamp(0.0, 1.0);
+      if (!_softwareDimmingStates.isClosed) {
+        _softwareDimmingStates.add(
+          DenialSoftwareDimmingState(
+            monitorId: returnedMonitor,
+            level: level,
+            supported: supported,
+            completesRead: true,
+          ),
+        );
+      }
+      return supported ? level : null;
+    } on Object {
+      // A standalone Settings process has no compositor-owned platform
+      // channel. Treat an older control socket as unsupported instead of
+      // leaving a platform-channel read pending until its timeout.
+      return null;
+    }
+  }
+
+  Future<double?> _readSoftwareDimmingLevelFromPlatform(int monitorId) {
+    final completer = Completer<double?>();
+    final pending = _pendingSoftwareDimmingReads.putIfAbsent(
+      monitorId,
+      () => <Completer<double?>>{},
+    );
+    pending.add(completer);
+    _sendSoftwareDimmingPlatformRequest(
+      command: 0,
+      monitorId: monitorId,
+      percent: 100,
+    );
+    return completer.future.timeout(
+      const Duration(seconds: 2),
+      onTimeout: () {
+        final current = _pendingSoftwareDimmingReads[monitorId];
+        current?.remove(completer);
+        if (current?.isEmpty ?? false) {
+          _pendingSoftwareDimmingReads.remove(monitorId);
+        }
+        return null;
+      },
+    );
+  }
+
+  bool setSoftwareDimming({required int monitorId, required double level}) {
+    if (monitorId <= 0) return false;
+    final percent = (level.clamp(0.0, 1.0) * 100).round();
+    if (!useControlSocket) {
+      _sendSoftwareDimmingPlatformRequest(
+        command: 1,
+        monitorId: monitorId,
+        percent: percent,
+      );
+      return true;
+    }
+    unawaited(
+      _sendControlRequest(
+        'software_dimming.set',
+        parameters: <String, Object>{
+          'monitor_id': monitorId,
+          'percent': percent,
+        },
+      ).catchError((Object _) => <String, Object?>{}),
+    );
+    return true;
+  }
+
+  void _sendSoftwareDimmingPlatformRequest({
+    required int command,
+    required int monitorId,
+    required int percent,
+  }) {
+    final data = ByteData(10)
+      ..setUint8(0, command)
+      ..setInt64(1, monitorId, Endian.little)
+      ..setUint8(9, percent.clamp(0, 100));
+    ServicesBinding.instance.defaultBinaryMessenger
+        .send(_softwareDimmingChannel, data)
+        ?.catchError((Object _) => null);
+  }
+
   /// Configures the compositor-owned lock, DPMS, and suspend idle policy.
   void setIdlePolicy({
     required PowerButtonAction powerButtonAction,
@@ -2550,6 +2687,35 @@ class DenialBridge {
       for (final completer in pending) {
         if (!completer.isCompleted) {
           completer.complete(level);
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<ByteData?> _handleSoftwareDimmingStateMessage(ByteData? data) async {
+    if (data == null || data.lengthInBytes < 10) {
+      return null;
+    }
+    final monitorId = data.getInt64(0, Endian.little);
+    if (monitorId <= 0 || _softwareDimmingStates.isClosed) {
+      return null;
+    }
+    final level = data.getUint8(8).clamp(0, 100) / 100.0;
+    final supported = data.getUint8(9) != 0;
+    final pending = _pendingSoftwareDimmingReads.remove(monitorId);
+    _softwareDimmingStates.add(
+      DenialSoftwareDimmingState(
+        monitorId: monitorId,
+        level: level,
+        supported: supported,
+        completesRead: pending?.isNotEmpty ?? false,
+      ),
+    );
+    if (pending != null) {
+      for (final completer in pending) {
+        if (!completer.isCompleted) {
+          completer.complete(supported ? level : null);
         }
       }
     }

@@ -63,6 +63,7 @@ const MAX_IMAGE_PIXELS: u64 = 64 * 1024 * 1024;
 #[repr(u8)]
 pub enum ClipboardOrigin {
     Wayland = 0,
+    #[cfg_attr(not(feature = "xwayland"), allow(dead_code))]
     X11 = 1,
     Flutter = 2,
 }
@@ -94,18 +95,23 @@ impl ClipboardSourceIdentity {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClipboardSelection {
+    #[cfg(feature = "xwayland")]
     Xwayland,
-    History { item_id: u64 },
+    History {
+        item_id: u64,
+    },
 }
 
 impl ClipboardSelection {
     pub fn history_item_id(self) -> Option<u64> {
         match self {
             Self::History { item_id } => Some(item_id),
+            #[cfg(feature = "xwayland")]
             Self::Xwayland => None,
         }
     }
 
+    #[cfg(feature = "xwayland")]
     pub fn is_xwayland(self) -> bool {
         self == Self::Xwayland
     }

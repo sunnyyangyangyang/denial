@@ -152,6 +152,7 @@ impl WireBridge {
                     &self.snapshot,
                     &self.atlas,
                     &self.work_area,
+                    &self.active_workspaces,
                 )?;
                 Ok(Some(self.outbound_builder.finished_data()))
             }
@@ -219,6 +220,7 @@ impl WireBridge {
                     &self.snapshot,
                     &self.atlas,
                     &self.work_area,
+                    &self.active_workspaces,
                 )?;
                 Ok(Some(self.outbound_builder.finished_data()))
             }

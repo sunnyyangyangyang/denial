@@ -196,7 +196,11 @@ class _ProfileScene extends StatelessWidget {
             fit: StackFit.expand,
             children: [
               ShellSurfaceHost(
-                child: DesktopSceneOverlayHost(
+                // Keep desktop feature popups inside the scene's paint plane.
+                // The screenshot selection layer remains above this overlay,
+                // so its frozen texture includes open menus while its controls
+                // paint and receive input above them.
+                child: ShellOverlayHost(
                   child: Stack(
                     fit: StackFit.expand,
                     children: [scene.content, ...scene.overlays],

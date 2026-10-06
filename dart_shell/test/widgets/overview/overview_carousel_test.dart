@@ -10,7 +10,7 @@ import 'package:denial_dart_shell/src/widgets/overview/overview_layer.dart';
 import 'package:denial_dart_shell/src/widgets/overview/overview_chrome.dart';
 import 'package:denial_dart_shell/src/widgets/overview/overview_focus_overlay.dart';
 import 'package:denial_dart_shell/src/widgets/retained_window_motion.dart';
-import 'package:denial_dart_shell/src/widgets/window_hero.dart';
+import 'package:denial_dart_shell/src/widgets/window_surface.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';

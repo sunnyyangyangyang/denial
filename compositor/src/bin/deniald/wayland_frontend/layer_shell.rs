@@ -3,6 +3,18 @@
 use super::*;
 
 impl WaylandFrontend {
+    pub(super) fn layer_surface_for_surface(
+        &self,
+        surface: &WlSurface,
+    ) -> Option<DesktopLayerSurface> {
+        let root = self.toplevel_candidate_surface(surface);
+        self.outputs.iter().find_map(|entry| {
+            layer_map_for_output(&entry.output)
+                .layer_for_surface(&root, WindowSurfaceType::TOPLEVEL)
+                .cloned()
+        })
+    }
+
     pub(super) fn layer_root_surface(&self, surface: &WlSurface) -> Option<(WlSurface, OutputId)> {
         let root = self.toplevel_candidate_surface(surface);
         self.outputs.iter().find_map(|entry| {
@@ -13,6 +25,33 @@ impl WaylandFrontend {
             )
             .map(|layer| (layer.wl_surface().clone(), entry.id))
         })
+    }
+
+    pub(super) fn layer_keyboard_focus_for_surface(
+        &self,
+        surface: &WlSurface,
+    ) -> Option<KeyboardFocusTarget> {
+        let layer = self.layer_surface_for_surface(surface)?;
+        layer
+            .can_receive_keyboard_focus()
+            .then(|| KeyboardFocusTarget::Wayland(layer.wl_surface().clone()))
+    }
+
+    /// Returns the topmost mapped top/overlay layer which requested exclusive
+    /// keyboard focus. Layer-shell requires this focus to remain authoritative
+    /// even when the pointer is over another client.
+    pub(super) fn exclusive_layer_keyboard_focus(&self) -> Option<KeyboardFocusTarget> {
+        for kind in [WlrLayer::Overlay, WlrLayer::Top] {
+            for output in &self.outputs {
+                let map = layer_map_for_output(&output.output);
+                if let Some(layer) = map.layers_on(kind).rev().find(|layer| {
+                    layer.cached_state().keyboard_interactivity == KeyboardInteractivity::Exclusive
+                }) {
+                    return Some(KeyboardFocusTarget::Wayland(layer.wl_surface().clone()));
+                }
+            }
+        }
+        None
     }
 
     pub(super) fn commit_layer_surface(&mut self, surface: &WlSurface) -> bool {
@@ -102,7 +141,12 @@ impl WlrLayerShellHandler for RuntimeState {
     fn new_popup(&mut self, parent: WlrLayerSurface, popup: PopupSurface) {
         let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
         let popup_surface = popup.wl_surface().clone();
-        let _ = frontend.popups.track_popup(PopupKind::Xdg(popup));
+        // XdgShellHandler::new_popup already tracks every XDG popup. At that
+        // point a layer-shell popup is still parentless, so PopupManager keeps
+        // it in its pending list until the first surface commit. Tracking it
+        // again here, after get_popup assigns the layer parent, inserts it into
+        // the popup tree immediately; the first commit then inserts the pending
+        // entry a second time and publishes the same surface twice.
         if let Some((_, output_id)) = frontend.layer_root_surface(parent.wl_surface())
             && let Some(output) = frontend.outputs.iter().find(|entry| entry.id == output_id)
         {

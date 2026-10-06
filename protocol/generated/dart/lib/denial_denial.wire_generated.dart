@@ -47,7 +47,8 @@ enum WindowContentKind {
   LayerShellBackground(2),
   LayerShellBottom(3),
   LayerShellTop(4),
-  LayerShellOverlay(5);
+  LayerShellOverlay(5),
+  PopupSurface(6);
 
   final int value;
   const WindowContentKind(this.value);
@@ -60,6 +61,7 @@ enum WindowContentKind {
       case 3: return WindowContentKind.LayerShellBottom;
       case 4: return WindowContentKind.LayerShellTop;
       case 5: return WindowContentKind.LayerShellOverlay;
+      case 6: return WindowContentKind.PopupSurface;
       default: throw StateError('Invalid value $value for bit flag enum');
     }
   }
@@ -68,7 +70,7 @@ enum WindowContentKind {
       value == null ? null : WindowContentKind.fromValue(value);
 
   static const int minValue = 0;
-  static const int maxValue = 5;
+  static const int maxValue = 6;
   static const fb.Reader<WindowContentKind> reader = _WindowContentKindReader();
 }
 
@@ -1866,10 +1868,11 @@ class Window {
   bool get minimized => const fb.BoolReader().vTableGet(_bc, _bcOffset, 80, false);
   bool get fullscreen => const fb.BoolReader().vTableGet(_bc, _bcOffset, 82, false);
   bool get maximized => const fb.BoolReader().vTableGet(_bc, _bcOffset, 84, false);
+  int get transientParentId => const fb.Uint64Reader().vTableGet(_bc, _bcOffset, 86, 0);
 
   @override
   String toString() {
-    return 'Window{objectId: ${objectId}, objectKind: ${objectKind}, surfaceId: ${surfaceId}, windowId: ${windowId}, textureId: ${textureId}, title: ${title}, appId: ${appId}, width: ${width}, height: ${height}, surfaceX: ${surfaceX}, surfaceY: ${surfaceY}, surfaceWidth: ${surfaceWidth}, surfaceHeight: ${surfaceHeight}, textureSourceX: ${textureSourceX}, textureSourceY: ${textureSourceY}, textureSourceWidth: ${textureSourceWidth}, textureSourceHeight: ${textureSourceHeight}, geometryX: ${geometryX}, geometryY: ${geometryY}, geometryWidth: ${geometryWidth}, geometryHeight: ${geometryHeight}, monitorId: ${monitorId}, transform: ${transform}, scale120: ${scale120}, statusColorArgb: ${statusColorArgb}, hasStatusColor: ${hasStatusColor}, contentX: ${contentX}, contentY: ${contentY}, contentWidth: ${contentWidth}, contentHeight: ${contentHeight}, surfaces: ${surfaces}, pinned: ${pinned}, suppressAnimations: ${suppressAnimations}, serverSideDecorated: ${serverSideDecorated}, opacity: ${opacity}, contentKind: ${contentKind}, opacityClass: ${opacityClass}, workspaceId: ${workspaceId}, minimized: ${minimized}, fullscreen: ${fullscreen}, maximized: ${maximized}}';
+    return 'Window{objectId: ${objectId}, objectKind: ${objectKind}, surfaceId: ${surfaceId}, windowId: ${windowId}, textureId: ${textureId}, title: ${title}, appId: ${appId}, width: ${width}, height: ${height}, surfaceX: ${surfaceX}, surfaceY: ${surfaceY}, surfaceWidth: ${surfaceWidth}, surfaceHeight: ${surfaceHeight}, textureSourceX: ${textureSourceX}, textureSourceY: ${textureSourceY}, textureSourceWidth: ${textureSourceWidth}, textureSourceHeight: ${textureSourceHeight}, geometryX: ${geometryX}, geometryY: ${geometryY}, geometryWidth: ${geometryWidth}, geometryHeight: ${geometryHeight}, monitorId: ${monitorId}, transform: ${transform}, scale120: ${scale120}, statusColorArgb: ${statusColorArgb}, hasStatusColor: ${hasStatusColor}, contentX: ${contentX}, contentY: ${contentY}, contentWidth: ${contentWidth}, contentHeight: ${contentHeight}, surfaces: ${surfaces}, pinned: ${pinned}, suppressAnimations: ${suppressAnimations}, serverSideDecorated: ${serverSideDecorated}, opacity: ${opacity}, contentKind: ${contentKind}, opacityClass: ${opacityClass}, workspaceId: ${workspaceId}, minimized: ${minimized}, fullscreen: ${fullscreen}, maximized: ${maximized}, transientParentId: ${transientParentId}}';
   }
 }
 
@@ -1887,7 +1890,7 @@ class WindowBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(41);
+    fbBuilder.startTable(42);
   }
 
   int addObjectId(int? objectId) {
@@ -2054,6 +2057,10 @@ class WindowBuilder {
     fbBuilder.addBool(40, maximized);
     return fbBuilder.offset;
   }
+  int addTransientParentId(int? transientParentId) {
+    fbBuilder.addUint64(41, transientParentId);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -2102,6 +2109,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
   final bool? _minimized;
   final bool? _fullscreen;
   final bool? _maximized;
+  final int? _transientParentId;
 
   WindowObjectBuilder({
     int? objectId,
@@ -2145,6 +2153,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
     bool? minimized,
     bool? fullscreen,
     bool? maximized,
+    int? transientParentId,
   })
       : _objectId = objectId,
         _objectKind = objectKind,
@@ -2186,7 +2195,8 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
         _workspaceId = workspaceId,
         _minimized = minimized,
         _fullscreen = fullscreen,
-        _maximized = maximized;
+        _maximized = maximized,
+        _transientParentId = transientParentId;
 
   /// Finish building, and store into the [fbBuilder].
   @override
@@ -2197,7 +2207,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
         : fbBuilder.writeString(_appId!);
     final int? surfacesOffset = _surfaces == null ? null
         : fbBuilder.writeList(_surfaces!.map((b) => b.getOrCreateOffset(fbBuilder)).toList());
-    fbBuilder.startTable(41);
+    fbBuilder.startTable(42);
     fbBuilder.addUint64(0, _objectId);
     fbBuilder.addUint8(1, _objectKind?.value);
     fbBuilder.addUint64(2, _surfaceId);
@@ -2239,6 +2249,7 @@ class WindowObjectBuilder extends fb.ObjectBuilder {
     fbBuilder.addBool(38, _minimized);
     fbBuilder.addBool(39, _fullscreen);
     fbBuilder.addBool(40, _maximized);
+    fbBuilder.addUint64(41, _transientParentId);
     return fbBuilder.endTable();
   }
 
@@ -2353,10 +2364,11 @@ class DisplayOutput {
   WireRect? get sourceRect => WireRect.reader.vTableGetNullable(_bc, _bcOffset, 12);
   double get scale => const fb.Float64Reader().vTableGet(_bc, _bcOffset, 14, 1.0);
   double get refreshRate => const fb.Float64Reader().vTableGet(_bc, _bcOffset, 16, 60.0);
+  int get activeWorkspace => const fb.Uint32Reader().vTableGet(_bc, _bcOffset, 18, 1);
 
   @override
   String toString() {
-    return 'DisplayOutput{monitorId: ${monitorId}, name: ${name}, logicalRect: ${logicalRect}, pixelSize: ${pixelSize}, sourceRect: ${sourceRect}, scale: ${scale}, refreshRate: ${refreshRate}}';
+    return 'DisplayOutput{monitorId: ${monitorId}, name: ${name}, logicalRect: ${logicalRect}, pixelSize: ${pixelSize}, sourceRect: ${sourceRect}, scale: ${scale}, refreshRate: ${refreshRate}, activeWorkspace: ${activeWorkspace}}';
   }
 }
 
@@ -2374,7 +2386,7 @@ class DisplayOutputBuilder {
   final fb.Builder fbBuilder;
 
   void begin() {
-    fbBuilder.startTable(7);
+    fbBuilder.startTable(8);
   }
 
   int addMonitorId(int? monitorId) {
@@ -2405,6 +2417,10 @@ class DisplayOutputBuilder {
     fbBuilder.addFloat64(6, refreshRate);
     return fbBuilder.offset;
   }
+  int addActiveWorkspace(int? activeWorkspace) {
+    fbBuilder.addUint32(7, activeWorkspace);
+    return fbBuilder.offset;
+  }
 
   int finish() {
     return fbBuilder.endTable();
@@ -2419,6 +2435,7 @@ class DisplayOutputObjectBuilder extends fb.ObjectBuilder {
   final WireRectObjectBuilder? _sourceRect;
   final double? _scale;
   final double? _refreshRate;
+  final int? _activeWorkspace;
 
   DisplayOutputObjectBuilder({
     int? monitorId,
@@ -2428,6 +2445,7 @@ class DisplayOutputObjectBuilder extends fb.ObjectBuilder {
     WireRectObjectBuilder? sourceRect,
     double? scale,
     double? refreshRate,
+    int? activeWorkspace,
   })
       : _monitorId = monitorId,
         _name = name,
@@ -2435,14 +2453,15 @@ class DisplayOutputObjectBuilder extends fb.ObjectBuilder {
         _pixelSize = pixelSize,
         _sourceRect = sourceRect,
         _scale = scale,
-        _refreshRate = refreshRate;
+        _refreshRate = refreshRate,
+        _activeWorkspace = activeWorkspace;
 
   /// Finish building, and store into the [fbBuilder].
   @override
   int finish(fb.Builder fbBuilder) {
     final int? nameOffset = _name == null ? null
         : fbBuilder.writeString(_name!);
-    fbBuilder.startTable(7);
+    fbBuilder.startTable(8);
     fbBuilder.addInt64(0, _monitorId);
     fbBuilder.addOffset(1, nameOffset);
     if (_logicalRect != null) {
@@ -2456,6 +2475,7 @@ class DisplayOutputObjectBuilder extends fb.ObjectBuilder {
     }
     fbBuilder.addFloat64(5, _scale);
     fbBuilder.addFloat64(6, _refreshRate);
+    fbBuilder.addUint32(7, _activeWorkspace);
     return fbBuilder.endTable();
   }
 

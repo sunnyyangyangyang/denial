@@ -1,10 +1,6 @@
-import 'dart:ui';
-
 import 'package:flutter/widgets.dart';
 
 import '../models/denial_window.dart';
-import '../theme/motion.dart';
-import '../theme/tokens.dart';
 import 'window_content_rect.dart';
 
 /// A window's live content rendered with rounded corners and an optional
@@ -60,54 +56,5 @@ class WindowSurface extends StatelessWidget {
     }
 
     return addRepaintBoundary ? RepaintBoundary(child: content) : content;
-  }
-}
-
-/// A positioned window surface that interpolates its rect, corner radius and
-/// border colour by [progress]. Drop it directly into a [Stack].
-class WindowHero extends StatelessWidget {
-  const WindowHero({
-    super.key,
-    required this.window,
-    required this.beginRect,
-    required this.endRect,
-    required this.progress,
-    this.beginRadius = 0.0,
-    this.endRadius = 0.0,
-    this.beginBorder,
-    this.endBorder,
-    this.curve = Motion.standard,
-  });
-
-  final DenialWindow window;
-  final Rect beginRect;
-  final Rect endRect;
-  final double progress;
-  final double beginRadius;
-  final double endRadius;
-  final Color? beginBorder;
-  final Color? endBorder;
-  final Curve curve;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = curve.transform(unit(progress));
-    final rect = Rect.lerp(beginRect, endRect, t)!;
-    final radius = lerpDouble(beginRadius, endRadius, t)!;
-
-    Color? border;
-    if (beginBorder != null || endBorder != null) {
-      const transparent = ShellMediaColors.transparentLight;
-      border = Color.lerp(
-        beginBorder ?? transparent,
-        endBorder ?? transparent,
-        t,
-      );
-    }
-
-    return Positioned.fromRect(
-      rect: rect,
-      child: WindowSurface(window: window, radius: radius, borderColor: border),
-    );
   }
 }

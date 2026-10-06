@@ -443,7 +443,7 @@ impl WaylandFrontend {
     fn is_xwayland_cursor_surface(&self, surface: &WlSurface) -> bool {
         surface
             .client()
-            .is_some_and(|client| client.get_data::<XWaylandClientData>().is_some())
+            .is_some_and(|client| xwayland::is_client(&client))
     }
 
     #[cfg(feature = "flutter")]
@@ -555,8 +555,8 @@ impl WaylandFrontend {
         &self.socket_name
     }
 
-    pub fn xdisplay_name(&self) -> OsString {
-        OsString::from(format!(":{}", self.xdisplay))
+    pub fn xdisplay_name(&self) -> Option<OsString> {
+        self.xwayland.display_name()
     }
 }
 

@@ -579,6 +579,7 @@ void main() {
             serverSideDecorated: false,
             opacity: 0.75,
             opacityClass: WindowOpacityClass.BorderAlphaOnly,
+            transientParentId: 99,
           ),
         ],
       ),
@@ -590,6 +591,7 @@ void main() {
     final windows = codec.decodeWindows(decoded!.payload as WindowSnapshot);
     expect(windows, hasLength(1));
     expect(windows!.single.suppressAnimations, isTrue);
+    expect(windows.single.transientParentObjectId, 99);
     expect(windows.single.serverSideDecorated, isFalse);
     expect(windows.single.opacity, closeTo(0.75, 0.0001));
     expect(windows.single.surfaceLayers.single.opacity, closeTo(0.5, 0.0001));
@@ -732,6 +734,47 @@ void main() {
       ByteData.sublistView(snapshot(textureId: 7)),
     );
     expect(codec.decodeWindows(invalid!.payload as WindowSnapshot), isNull);
+  });
+
+  test('popup surfaces decode as focus-inert non-application content', () {
+    final bytes = EnvelopeObjectBuilder(
+      protocolVersion: 1,
+      sequence: 1,
+      payloadType: PayloadTypeId.WindowSnapshot,
+      payload: WindowSnapshotObjectBuilder(
+        windows: <WindowObjectBuilder>[
+          WindowObjectBuilder(
+            objectId: 101,
+            surfaceId: 101,
+            windowId: 101,
+            textureId: 102,
+            title: 'Fcitx5 Input Window',
+            appId: 'fcitx',
+            width: 320,
+            height: 72,
+            surfaceWidth: 320,
+            surfaceHeight: 72,
+            geometryX: 240,
+            geometryY: 180,
+            geometryWidth: 320,
+            geometryHeight: 72,
+            contentWidth: 320,
+            contentHeight: 72,
+            contentKind: WindowContentKind.PopupSurface,
+          ),
+        ],
+      ),
+    ).toBytes('DENW');
+
+    final codec = DenialWireCodec();
+    final decoded = codec.decodeStructured(ByteData.sublistView(bytes));
+    final window = codec
+        .decodeWindows(decoded!.payload as WindowSnapshot)!
+        .single;
+
+    expect(window.contentKind, DenialWindowContentKind.popupSurface);
+    expect(window.isPopupSurface, isTrue);
+    expect(window.isUserApp, isFalse);
   });
 
   test('window business validation rejects opacity outside the unit range', () {

@@ -1347,6 +1347,8 @@ class DenialWireCodec {
           DenialWindowContentKind.layerShellTop,
         generated.WindowContentKind.LayerShellOverlay =>
           DenialWindowContentKind.layerShellOverlay,
+        generated.WindowContentKind.PopupSurface =>
+          DenialWindowContentKind.popupSurface,
       };
       if (contentKind == DenialWindowContentKind.localFlutter &&
           (window.textureId != 0 || sourceLayers.isNotEmpty)) {
@@ -1425,6 +1427,9 @@ class DenialWireCodec {
           geometryHeight: window.geometryHeight,
           monitorId: window.monitorId,
           workspaceId: window.workspaceId,
+          transientParentObjectId: window.transientParentId == 0
+              ? null
+              : window.transientParentId,
           minimized: window.minimized,
           fullscreen: window.fullscreen,
           maximized: window.maximized,
@@ -1516,6 +1521,8 @@ class DenialWireCodec {
           outputPixels.height <= 0.0 ||
           output.scale <= 0.0 ||
           output.refreshRate <= 0.0 ||
+          output.activeWorkspace < 1 ||
+          output.activeWorkspace > 9 ||
           output.monitorId < 0 ||
           !outputIds.add(output.monitorId)) {
         rejectedStructuredMessages += 1;
@@ -1529,6 +1536,7 @@ class DenialWireCodec {
           pixelSize: Size(outputPixels.width, outputPixels.height),
           scale: output.scale,
           refreshRate: output.refreshRate,
+          activeWorkspace: output.activeWorkspace,
         ),
       );
     }

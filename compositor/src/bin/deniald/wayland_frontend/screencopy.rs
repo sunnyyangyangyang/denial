@@ -51,7 +51,6 @@ use smithay::reexports::wayland_server::{
 use smithay::utils::{
     Buffer as BufferCoords, Logical, Physical, Point, Rectangle, Size, Transform,
 };
-use smithay::wayland::compositor::with_states;
 use smithay::wayland::dmabuf::get_dmabuf;
 use smithay::wayland::foreign_toplevel_list::{
     ForeignToplevelHandle, ForeignToplevelListHandler, ForeignToplevelListState,
@@ -68,9 +67,10 @@ use smithay::wayland::image_copy_capture::{
     Session as ImageCopySession, SessionRef as ImageCopySessionRef,
 };
 use smithay::wayland::seat::WaylandFocus;
-use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use smithay::wayland::shm::{with_buffer_contents, with_buffer_contents_mut};
 use tracing::{debug, warn};
+
+use super::managed_window::ManagedWindow;
 
 #[cfg(feature = "flutter")]
 use super::super::{egl_context, flutter_runtime::OutputBufferLease};
@@ -99,13 +99,17 @@ enum CaptureTargetKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CaptureTarget {
     kind: CaptureTargetKind,
-    /// Region within the output-local Flutter target, in top-left pixels.
+    /// Region within the upright, output-local pixel space.
     source: Rectangle<i32, Physical>,
     /// Client buffer size in the output's transformed physical pixels.
     size: Size<i32, Physical>,
     /// Complete output extent in transformed physical pixels.
     output_size: Size<i32, Physical>,
-    /// Mapping Flutter applied from this logical pixel space into scanout.
+    /// Orientation of the native Flutter output buffer.
+    ///
+    /// The worker reads that per-output buffer directly. It uses this transform
+    /// both to locate the upright `source` inside the native buffer and to
+    /// render normal-oriented pixels into the capture client's buffer.
     transform: Transform,
     overlay_cursor: bool,
 }
@@ -123,6 +127,15 @@ impl CaptureTarget {
             CaptureTargetKind::Output(_) => None,
             CaptureTargetKind::Toplevel(toplevel) => Some(toplevel),
         }
+    }
+
+    fn into_native_output_buffer(mut self) -> Self {
+        let transform = self.transform;
+        self.source = transform.transform_rect_in(self.source, &self.output_size);
+        self.size = transform.transform_size(self.size);
+        self.output_size = transform.transform_size(self.output_size);
+        self.transform = Transform::Normal;
+        self
     }
 }
 
@@ -470,10 +483,10 @@ fn scaled_edge(edge: i32, logical_extent: i32, pixel_extent: i32) -> Option<i32>
 fn project_capture_region(
     output: OutputId,
     source: Rectangle<i32, Physical>,
-    scanout_size: Size<i32, Physical>,
+    capture_size: Size<i32, Physical>,
     logical_size: Size<i32, Logical>,
     requested: Option<Rectangle<i32, Logical>>,
-    transform: Transform,
+    output_transform: Transform,
     overlay_cursor: bool,
 ) -> Option<CaptureTarget> {
     let requested = requested.unwrap_or_else(|| Rectangle::from_size(logical_size));
@@ -501,10 +514,10 @@ fn project_capture_region(
     let source_top = scaled_edge(top, logical_size.h, source.size.h)?;
     let source_right = scaled_edge(right, logical_size.w, source.size.w)?;
     let source_bottom = scaled_edge(bottom, logical_size.h, source.size.h)?;
-    let buffer_left = scaled_edge(left, logical_size.w, scanout_size.w)?;
-    let buffer_top = scaled_edge(top, logical_size.h, scanout_size.h)?;
-    let buffer_right = scaled_edge(right, logical_size.w, scanout_size.w)?;
-    let buffer_bottom = scaled_edge(bottom, logical_size.h, scanout_size.h)?;
+    let buffer_left = scaled_edge(left, logical_size.w, capture_size.w)?;
+    let buffer_top = scaled_edge(top, logical_size.h, capture_size.h)?;
+    let buffer_right = scaled_edge(right, logical_size.w, capture_size.w)?;
+    let buffer_bottom = scaled_edge(bottom, logical_size.h, capture_size.h)?;
 
     let source = Rectangle::new(
         (
@@ -527,8 +540,8 @@ fn project_capture_region(
         kind: CaptureTargetKind::Output(output),
         source,
         size,
-        output_size: scanout_size,
-        transform,
+        output_size: capture_size,
+        transform: output_transform,
         overlay_cursor,
     })
 }
@@ -827,10 +840,10 @@ pub(crate) fn compose_output_targets_to_atlas(
         // black in both the selection texture and the saved screenshot.
         let destination_local = output_composite_local_rect(source.destination);
         // Flutter's output projection maps the atlas scene into the native
-        // connector buffer. Smithay's source transform describes the reverse,
-        // buffer-to-scene orientation, so do not reuse that projection in the
-        // same direction. On 90/270-degree outputs doing so adds another half
-        // turn when reconstructing the atlas.
+        // connector buffer. `render_texture_from_to` applies the inverse of
+        // the supplied source orientation, so passing that same orientation
+        // reconstructs upright atlas pixels. Pre-inverting it here applies the
+        // output rotation twice on 90/270-degree outputs.
         let source_transform = output_composite_source_transform(source.transform);
         frame.render_texture_from_to(
             &texture,
@@ -853,7 +866,76 @@ fn output_composite_local_rect(destination: Rectangle<i32, Physical>) -> Rectang
 }
 
 fn output_composite_source_transform(transform: Transform) -> Transform {
-    transform.invert()
+    transform
+}
+
+#[cfg(test)]
+mod capture_rotation_tests {
+    use super::*;
+
+    #[test]
+    fn atlas_composition_passes_native_output_orientation_to_renderer() {
+        // Smithay's renderer applies the inverse of src_transform. The native
+        // buffer orientation must therefore be passed through, not inverted
+        // before the renderer sees it.
+        assert_eq!(
+            output_composite_source_transform(Transform::_90),
+            Transform::_90
+        );
+        assert_eq!(
+            output_composite_source_transform(Transform::_270),
+            Transform::_270
+        );
+        assert_eq!(
+            output_composite_source_transform(Transform::Flipped90),
+            Transform::Flipped90
+        );
+    }
+
+    #[test]
+    fn rotated_output_capture_maps_upright_region_into_native_buffer() {
+        let target = project_capture_region(
+            OutputId(7),
+            Rectangle::from_size((1440, 2560).into()),
+            (1440, 2560).into(),
+            (1440, 2560).into(),
+            None,
+            Transform::_90,
+            false,
+        )
+        .expect("valid capture target");
+
+        assert_eq!(target.transform, Transform::_90);
+        assert_eq!(target.size, Size::from((1440, 2560)));
+        assert_eq!(
+            capture_source_rect(target, (2560, 1440).into()),
+            Some(Rectangle::from_size((2560, 1440).into()))
+        );
+    }
+
+    #[test]
+    fn legacy_capture_preserves_native_output_orientation() {
+        let target = project_capture_region(
+            OutputId(7),
+            Rectangle::from_size((1440, 2560).into()),
+            (1440, 2560).into(),
+            (1440, 2560).into(),
+            None,
+            Transform::_90,
+            false,
+        )
+        .expect("valid capture target")
+        .into_native_output_buffer();
+
+        assert_eq!(target.transform, Transform::Normal);
+        assert_eq!(target.source, Rectangle::from_size((2560, 1440).into()));
+        assert_eq!(target.size, Size::from((2560, 1440)));
+        assert_eq!(target.output_size, Size::from((2560, 1440)));
+        assert_eq!(
+            capture_source_rect(target, (2560, 1440).into()),
+            Some(Rectangle::from_size((2560, 1440).into()))
+        );
+    }
 }
 
 fn copy_to_dmabuf(
@@ -963,22 +1045,9 @@ fn render_toplevel_capture(
 }
 
 fn foreign_toplevel_metadata(window: &Window) -> (String, String) {
-    if let Some(toplevel) = window.toplevel() {
-        return with_states(toplevel.wl_surface(), |states| {
-            let Some(data) = states.data_map.get::<XdgToplevelSurfaceData>() else {
-                return (String::new(), String::new());
-            };
-            let data = data.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            (
-                data.title.clone().unwrap_or_default(),
-                data.app_id.clone().unwrap_or_default(),
-            )
-        });
-    }
-    window.x11_surface().map_or_else(
-        || (String::new(), String::new()),
-        |surface| (surface.title(), surface.class()),
-    )
+    ManagedWindow::new(window)
+        .map(|window| window.metadata())
+        .unwrap_or_default()
 }
 
 impl WaylandFrontend {
@@ -1069,6 +1138,7 @@ impl WaylandFrontend {
     ) -> Option<CaptureTarget> {
         let output = Output::from_resource(output)?;
         self.capture_target_for_output(&output, requested, overlay_cursor)
+            .map(CaptureTarget::into_native_output_buffer)
     }
 
     fn image_copy_target(

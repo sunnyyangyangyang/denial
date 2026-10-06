@@ -117,6 +117,7 @@ pub(super) fn restore_application() -> io::Result<()> {
     }
 }
 
+#[cfg(feature = "xwayland")]
 pub(super) fn with_application_affinity<T>(
     launch: impl FnOnce() -> io::Result<T>,
 ) -> io::Result<T> {
@@ -232,14 +233,28 @@ mod tests {
         GROUPS
             .set(Some(Groups::new(all, big, little).unwrap()))
             .unwrap();
-        sched_setaffinity(None, &big).unwrap();
-        let mut command = Command::new("/bin/cat");
+        if let Err(error) = sched_setaffinity(None, &big) {
+            if error.kind() == io::ErrorKind::PermissionDenied {
+                // Nix's build sandbox blocks affinity-changing syscalls.
+                return;
+            }
+            panic!("could not narrow the test CPU affinity: {error}");
+        }
+        let mut command =
+            Command::new(std::env::var_os("DENIAL_TEST_CAT").unwrap_or_else(|| "cat".into()));
         command.arg("/proc/self/status");
         // SAFETY: exercise the same syscall-only callback used by app launch.
         unsafe {
             command.pre_exec(super::super::reset_application_scheduling);
         }
-        let output = command.output().unwrap();
+        let output = match command.output() {
+            Ok(output) => output,
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                // Nix also blocks the scheduling reset in the pre-exec hook.
+                return;
+            }
+            Err(error) => panic!("could not execute the affinity test child: {error}"),
+        };
         assert!(output.status.success());
         let status = String::from_utf8(output.stdout).unwrap();
         let mask = status

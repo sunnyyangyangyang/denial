@@ -1,4 +1,5 @@
 import 'package:flutter/widgets.dart';
+import 'package:flutter/rendering.dart';
 
 /// Animates a positioned rectangle while retaining its child layout.
 ///
@@ -74,44 +75,170 @@ class _RetainedAnimatedPositionedState
     final visualRect = _rect?.evaluate(animation) ?? destinationRect;
     final retainedRect = widget.layoutRect ?? destinationRect;
     final layoutRect = widget.layoutDuringAnimation ? visualRect : retainedRect;
-    final scaleX = retainedRect.width > 0
-        ? visualRect.width / retainedRect.width
-        : 1.0;
-    final scaleY = retainedRect.height > 0
-        ? visualRect.height / retainedRect.height
-        : 1.0;
-    final translation = visualRect.topLeft - retainedRect.topLeft;
-    final transform = widget.layoutDuringAnimation
-        ? Matrix4.identity()
-        : (Matrix4.diagonal3Values(scaleX, scaleY, 1)
-            ..setTranslationRaw(translation.dx, translation.dy, 0));
-
-    Widget child = Transform(
-      transform: transform,
-      transformHitTests: true,
-      child: widget.child,
+    return Positioned.fill(
+      child: _RetainedTransformBox(
+        retainedSize: layoutRect.size,
+        visualRect: visualRect,
+        globalClipRect: widget.globalClipRect,
+        child: widget.child,
+      ),
     );
-    if (widget.globalClipRect case final globalClipRect?) {
-      child = ClipRect(
-        clipper: _SceneRectClipper(globalClipRect.shift(-layoutRect.topLeft)),
-        clipBehavior: Clip.hardEdge,
-        child: child,
-      );
-    }
-
-    return Positioned.fromRect(rect: layoutRect, child: child);
   }
 }
 
-class _SceneRectClipper extends CustomClipper<Rect> {
-  const _SceneRectClipper(this.rect);
+/// Gives a retained child stable layout without constraining its painted or
+/// interactive bounds to the old layout rectangle.
+///
+/// A normal [Transform] can paint outside its box, but ancestors reject hit
+/// tests before the inverse transform is reached. Overview previews regularly
+/// move outside their desktop rectangles, especially after a resize. This
+/// scene-sized proxy owns the complete hit-test area, then applies one shared
+/// transform to painting, hit testing, and semantics.
+class _RetainedTransformBox extends SingleChildRenderObjectWidget {
+  const _RetainedTransformBox({
+    required this.retainedSize,
+    required this.visualRect,
+    required this.globalClipRect,
+    required super.child,
+  });
 
-  final Rect rect;
+  final Size retainedSize;
+  final Rect visualRect;
+  final Rect? globalClipRect;
 
   @override
-  Rect getClip(Size size) => rect;
+  _RenderRetainedTransformBox createRenderObject(BuildContext context) =>
+      _RenderRetainedTransformBox(
+        retainedSize: retainedSize,
+        visualRect: visualRect,
+        globalClipRect: globalClipRect,
+      );
 
   @override
-  bool shouldReclip(covariant _SceneRectClipper oldClipper) =>
-      oldClipper.rect != rect;
+  void updateRenderObject(
+    BuildContext context,
+    _RenderRetainedTransformBox renderObject,
+  ) {
+    renderObject
+      ..retainedSize = retainedSize
+      ..visualRect = visualRect
+      ..globalClipRect = globalClipRect;
+  }
+}
+
+class _RenderRetainedTransformBox extends RenderProxyBox {
+  _RenderRetainedTransformBox({
+    required Size retainedSize,
+    required Rect visualRect,
+    required Rect? globalClipRect,
+  }) : _retainedSize = retainedSize,
+       _visualRect = visualRect,
+       _globalClipRect = globalClipRect;
+
+  Size _retainedSize;
+
+  set retainedSize(Size value) {
+    if (_retainedSize == value) {
+      return;
+    }
+    _retainedSize = value;
+    markNeedsLayout();
+  }
+
+  Rect _visualRect;
+
+  set visualRect(Rect value) {
+    if (_visualRect == value) {
+      return;
+    }
+    _visualRect = value;
+    markNeedsPaint();
+    markNeedsSemanticsUpdate();
+  }
+
+  Rect? _globalClipRect;
+
+  set globalClipRect(Rect? value) {
+    if (_globalClipRect == value) {
+      return;
+    }
+    _globalClipRect = value;
+    markNeedsPaint();
+    markNeedsSemanticsUpdate();
+  }
+
+  Matrix4 get _visualTransform {
+    final scaleX = _retainedSize.width > 0
+        ? _visualRect.width / _retainedSize.width
+        : 1.0;
+    final scaleY = _retainedSize.height > 0
+        ? _visualRect.height / _retainedSize.height
+        : 1.0;
+    return Matrix4.diagonal3Values(scaleX, scaleY, 1)
+      ..setTranslationRaw(_visualRect.left, _visualRect.top, 0);
+  }
+
+  @override
+  void performLayout() {
+    assert(constraints.hasBoundedWidth && constraints.hasBoundedHeight);
+    size = constraints.biggest;
+    child?.layout(BoxConstraints.tight(_retainedSize), parentUsesSize: true);
+  }
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    final clip = _globalClipRect;
+    if (clip != null && !clip.contains(position)) {
+      return false;
+    }
+    return super.hitTest(result, position: position);
+  }
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
+    final child = this.child;
+    if (child == null) {
+      return false;
+    }
+    return result.addWithPaintTransform(
+      transform: _visualTransform,
+      position: position,
+      hitTest: (result, transformed) =>
+          child.hitTest(result, position: transformed),
+    );
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (child == null) {
+      return;
+    }
+
+    void paintTransformed(PaintingContext context, Offset offset) {
+      context.pushTransform(
+        needsCompositing,
+        offset,
+        _visualTransform,
+        (context, offset) => super.paint(context, offset),
+      );
+    }
+
+    final clip = _globalClipRect;
+    if (clip == null) {
+      paintTransformed(context, offset);
+      return;
+    }
+    context.pushClipRect(
+      needsCompositing,
+      offset,
+      clip,
+      paintTransformed,
+      clipBehavior: Clip.hardEdge,
+    );
+  }
+
+  @override
+  void applyPaintTransform(RenderBox child, Matrix4 transform) {
+    transform.multiply(_visualTransform);
+  }
 }

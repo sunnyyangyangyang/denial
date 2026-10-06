@@ -6,8 +6,8 @@ deniald \- run the Denial Wayland compositor
 .RI [ options ]
 .SH DESCRIPTION
 .B deniald
-owns the DRM/KMS display, input devices, Wayland and Xwayland frontends, and
-the embedded Flutter desktop scene.
+owns the DRM/KMS display, input devices, the Wayland frontend, optional
+Xwayland integration, and the embedded Flutter desktop scene.
 An installed graphical session should normally start
 .BR denial-session (1),
 which discovers the correct devices, configuration, and Flutter bundle before
@@ -27,7 +27,13 @@ Load persistent output configuration from
 .IR path .
 .TP
 .B \-\-wayland
-Start the Wayland frontend and Xwayland integration.
+Start the Wayland frontend and, when available, Xwayland integration.
+.TP
+.B \-\-no-xwayland
+Do not start the Xwayland server or publish an X11
+.B DISPLAY
+for this session. This option is also accepted by builds compiled without the
+optional Xwayland feature.
 .TP
 .BI \-\-flutter-bundle " path"
 Load the packaged Flutter shell bundle from

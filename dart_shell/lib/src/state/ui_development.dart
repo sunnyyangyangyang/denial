@@ -33,12 +33,10 @@ class SystemUiWorkspaceSetupService implements UiWorkspaceSetupService {
   final Map<String, String> _environment;
 
   String get _controlTool =>
-      _tool(variable: 'DENIAL_CONTROL_TOOL', fallback: '/usr/bin/denialctl');
+      _tool(variable: 'DENIAL_CONTROL_TOOL', fallback: 'denialctl');
 
-  String get _developmentTool => _tool(
-    variable: 'DENIAL_DEVELOPMENT_TOOL',
-    fallback: '/usr/bin/denial-ui',
-  );
+  String get _developmentTool =>
+      _tool(variable: 'DENIAL_DEVELOPMENT_TOOL', fallback: 'denial-ui');
 
   String _tool({required String variable, required String fallback}) {
     final configured = _environment[variable]?.trim();

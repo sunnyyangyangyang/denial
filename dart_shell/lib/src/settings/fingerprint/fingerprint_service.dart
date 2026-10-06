@@ -94,14 +94,19 @@ class FingerprintSettingsSession extends ChangeNotifier {
     notifyListeners();
     try {
       final process = await Process.start(
-        '/usr/bin/sudo',
+        Platform.environment['DENIAL_PRIVILEGE_TOOL']?.trim().isNotEmpty == true
+            ? Platform.environment['DENIAL_PRIVILEGE_TOOL']!.trim()
+            : 'sudo',
         [
           '-S',
           '-k',
           '-p',
           'DENIAL_SETTINGS_PASSWORD:',
           '--',
-          '/usr/bin/deniald',
+          Platform.environment['DENIAL_COMPOSITOR_BINARY']?.trim().isNotEmpty ==
+                  true
+              ? Platform.environment['DENIAL_COMPOSITOR_BINARY']!.trim()
+              : 'deniald',
           '--fingerprint-settings',
         ],
         environment: {'LC_ALL': 'C'},

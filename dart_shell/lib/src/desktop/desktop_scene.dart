@@ -452,7 +452,7 @@ class _DesktopScene extends ConsumerStatefulWidget {
     required this.panelDurationScale,
     required this.windowSwitcher,
     required this.displayLayout,
-    required this.frameTimingOptions,
+    required this.showFrameTimingOverlay,
     required this.wallpaperSelectorVisible,
     required this.shellOutputRect,
     required this.mainOutputRect,
@@ -490,7 +490,7 @@ class _DesktopScene extends ConsumerStatefulWidget {
   final double panelDurationScale;
   final DesktopWindowSwitcherState? windowSwitcher;
   final DisplayLayout? displayLayout;
-  final ShellFrameTimingOptions frameTimingOptions;
+  final bool showFrameTimingOverlay;
   final bool wallpaperSelectorVisible;
   final Rect? shellOutputRect;
   final Rect? mainOutputRect;
@@ -575,8 +575,8 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
     final windowsById = <int, DenialWindow>{
       for (final window in windows) window.objectId: window,
     };
-    final inputMethodPopups = windows
-        .where((window) => window.isInputMethodPopup)
+    final popupSurfaces = windows
+        .where((window) => window.isPopupSurface)
         .toList(growable: false);
     final placements =
         placementMap.values
@@ -592,7 +592,7 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
           );
     final topology = (
       windowsById: windowsById,
-      inputMethodPopups: inputMethodPopups,
+      popupSurfaces: popupSurfaces,
       placements: placements,
       topZ: placements
           .where((placement) => !placement.minimized)
@@ -699,15 +699,8 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
         continue;
       }
       final closeId = _nextCloseId++;
-      final outputClip = desktopScrollingOutputClip(
-        windowLayout: ref.read(shellSettingsProvider).layout.windowLayout,
-        pinned: window.pinned,
-        transformed:
-            oldWidget.desktop.isInOverview(window.objectId) ||
-            DesktopWindowSwitcherLayout.contains(
-              oldWidget.windowSwitcher,
-              window.objectId,
-            ),
+      final outputClip = desktopOutputClip(
+        activelyDragging: placement.dragging,
         outputRect: desktopOutputPixelGridForMonitor(
           oldWidget.displayLayout,
           placement.monitorId,
@@ -795,7 +788,7 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
     final windowSwitcher = widget.windowSwitcher;
     final displayLayout = widget.displayLayout;
     final minimizedWindowPlacement = widget.minimizedWindowPlacement;
-    final frameTimingOptions = widget.frameTimingOptions;
+    final showFrameTimingOverlay = widget.showFrameTimingOverlay;
     final wallpaperSelectorVisible = widget.wallpaperSelectorVisible;
     final shellOutputRect = widget.shellOutputRect;
     final mainOutputRect = widget.mainOutputRect;
@@ -825,7 +818,7 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
       windowSwitcher: windowSwitcher,
     );
     final windowsById = topology.windowsById;
-    final inputMethodPopups = topology.inputMethodPopups;
+    final popupSurfaces = topology.popupSurfaces;
     final placements = topology.placements
         .where(
           (placement) =>
@@ -939,33 +932,25 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
                     onEndOverviewDrag: onEndOverviewDrag,
                     onCancelOverviewDrag: onCancelOverviewDrag,
                   ),
-                  // The bar belongs to the wallpaper plane. Any window moved
-                  // into its reserved strip paints and receives input above it.
-                  for (final bar in visibleSystemBars)
-                    Positioned.fromRect(
-                      key: ValueKey<String>('system-bar-${bar.monitorId}'),
-                      rect: bar.rect,
-                      child: DesktopSystemBar(
-                        monitorId: bar.monitorId,
-                        side: bar.side,
-                        onOpenPowerSettings: onOpenPowerSettings,
-                      ),
-                    ),
-                  Positioned.fill(
-                    child: ShellInputRegion(
-                      debugLabel: 'Desktop overview',
-                      active: desktop.overviewActive,
-                      pointerPolicy: ShellPointerPolicy.fullScene,
-                      keyboardPolicy: ShellKeyboardPolicy.capture,
-                      compositorPolicy: ShellCompositorPolicy.exclusive,
-                      child: const IgnorePointer(child: SizedBox.expand()),
-                    ),
-                  ),
-                  Positioned.fill(
-                    child: _DesktopOverviewBarrier(
-                      active: desktop.overviewActive,
-                      onTap: onOverviewBarrierTap,
-                    ),
+                  DesktopOverviewInputLayer(
+                    active: desktop.overviewActive,
+                    onBarrierTap: onOverviewBarrierTap,
+                    // The bar belongs to the wallpaper plane. Its controls
+                    // remain above the overview dismissal barrier, while any
+                    // window moved into its reserved strip still paints and
+                    // receives input above this complete layer.
+                    foregroundControls: <Widget>[
+                      for (final bar in visibleSystemBars)
+                        Positioned.fromRect(
+                          key: ValueKey<String>('system-bar-${bar.monitorId}'),
+                          rect: bar.rect,
+                          child: DesktopSystemBar(
+                            monitorId: bar.monitorId,
+                            side: bar.side,
+                            onOpenPowerSettings: onOpenPowerSettings,
+                          ),
+                        ),
+                    ],
                   ),
                   if (windowSwitcher != null)
                     DesktopWindowSwitcherBackdrop(
@@ -1037,11 +1022,11 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
                     onLaunchApp: onLaunchApp,
                     onLaunchLocalApp: onLaunchLocalApp,
                   ),
-                  for (final popup in inputMethodPopups)
+                  for (final popup in popupSurfaces)
                     if (popup.geometry case final geometry?)
                       RetainedAnimatedPositioned(
                         key: ValueKey<String>(
-                          'desktop-input-method-popup-${popup.objectId}',
+                          'desktop-popup-surface-${popup.objectId}',
                         ),
                         duration: reduceMotion
                             ? Duration.zero
@@ -1065,15 +1050,11 @@ class _DesktopSceneState extends ConsumerState<_DesktopScene> {
                           ),
                         ),
                       ),
-                  if (frameTimingOptions.showOverlay)
-                    Positioned(
+                  if (showFrameTimingOverlay)
+                    const Positioned(
                       top: 12,
                       right: 12,
-                      child: ShellFrameTimingOverlayStack(
-                        windows: windows,
-                        showImportedTextureCharts:
-                            frameTimingOptions.showImportedTextureCharts,
-                      ),
+                      child: ShellFrameTimeOverlay(),
                     ),
                 ],
               ),

@@ -101,6 +101,10 @@ const KEY_LEFT_META: u32 = 125;
 const KEY_RIGHT_META: u32 = 126;
 const KEY_LEFT_SHIFT: u32 = 42;
 const KEY_RIGHT_SHIFT: u32 = 54;
+const KEY_F1: u32 = 59;
+const KEY_F10: u32 = 68;
+const KEY_F11: u32 = 87;
+const KEY_F12: u32 = 88;
 
 const LEFT_MODIFIER: u8 = 1 << 0;
 const RIGHT_MODIFIER: u8 = 1 << 1;
@@ -1680,6 +1684,7 @@ fn parse_key(name: &str) -> Option<(u32, String)> {
 pub(super) enum ShortcutDisposition {
     Forward,
     Consume,
+    RequestVtSwitch(i32),
     RequestShutdown,
     RequestApplications,
     RequestDashboard,
@@ -1743,6 +1748,7 @@ pub(super) struct ShortcutEngine {
     logo_chorded: bool,
     window_switcher_release: Option<WindowSwitcherRelease>,
     captured_keys: HashMap<u32, ShortcutTarget>,
+    captured_vt_keys: HashSet<u32>,
 }
 
 impl Default for ShortcutEngine {
@@ -1762,6 +1768,7 @@ impl ShortcutEngine {
             logo_chorded: false,
             window_switcher_release: None,
             captured_keys: HashMap::new(),
+            captured_vt_keys: HashSet::new(),
         })
     }
 
@@ -1956,6 +1963,9 @@ impl ShortcutEngine {
             return ShortcutDisposition::Forward;
         }
         if !pressed {
+            if self.captured_vt_keys.remove(&evdev_keycode) {
+                return ShortcutDisposition::Consume;
+            }
             let captured = self.captured_keys.remove(&evdev_keycode).is_some();
             if matches!(
                 self.window_switcher_release,
@@ -1969,6 +1979,16 @@ impl ShortcutEngine {
             } else {
                 ShortcutDisposition::Forward
             };
+        }
+
+        if self.captured_vt_keys.contains(&evdev_keycode) {
+            return ShortcutDisposition::Consume;
+        }
+        if self.active_modifiers() == Modifier::Ctrl.flag() | Modifier::Alt.flag()
+            && let Some(vt) = vt_for_evdev_keycode(evdev_keycode)
+        {
+            self.captured_vt_keys.insert(evdev_keycode);
+            return ShortcutDisposition::RequestVtSwitch(vt);
         }
 
         if let Some(target) = self.captured_keys.get(&evdev_keycode) {
@@ -2016,6 +2036,15 @@ impl ShortcutEngine {
         }
     }
 
+    /// A compositor-consumed pointer-axis action while SUPER is held is also
+    /// a chord, so releasing SUPER must not invoke its modifier-tap action.
+    #[cfg(any(feature = "flutter", test))]
+    pub(super) fn note_pointer_axis(&mut self) {
+        if self.logo_keys != 0 {
+            self.logo_chorded = true;
+        }
+    }
+
     /// Whether either physical SUPER key is currently compositor-owned.
     #[cfg(any(feature = "flutter", test))]
     pub(super) fn super_pressed(&self) -> bool {
@@ -2030,12 +2059,22 @@ impl ShortcutEngine {
         self.logo_chorded = false;
         self.window_switcher_release = None;
         self.captured_keys.clear();
+        self.captured_vt_keys.clear();
     }
 
     /// Releases a just-matched key when a context-sensitive action declines
     /// it, allowing both its press and later release to reach the client.
     pub(super) fn pass_through_key(&mut self, evdev_keycode: u32) {
         self.captured_keys.remove(&evdev_keycode);
+    }
+}
+
+fn vt_for_evdev_keycode(evdev_keycode: u32) -> Option<i32> {
+    match evdev_keycode {
+        KEY_F1..=KEY_F10 => i32::try_from(evdev_keycode - KEY_F1 + 1).ok(),
+        KEY_F11 => Some(11),
+        KEY_F12 => Some(12),
+        _ => None,
     }
 }
 
@@ -2135,6 +2174,55 @@ pub(super) type NativeEscapeShortcut = ShortcutEngine;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ctrl_alt_function_keys_request_vt_switch_and_capture_their_lifecycle() {
+        for vt in 1..=12 {
+            let keycode = match vt {
+                1..=10 => KEY_F1 + vt - 1,
+                11 => KEY_F11,
+                12 => KEY_F12,
+                _ => unreachable!(),
+            };
+            let mut engine = ShortcutEngine::from_file(&default_shortcut_file()).unwrap();
+
+            assert_eq!(
+                engine.observe(KEY_LEFT_CTRL, true),
+                ShortcutDisposition::Forward
+            );
+            assert_eq!(
+                engine.observe(KEY_RIGHT_ALT, true),
+                ShortcutDisposition::Forward
+            );
+            assert_eq!(
+                engine.observe(keycode, true),
+                ShortcutDisposition::RequestVtSwitch(vt as i32)
+            );
+            assert_eq!(engine.observe(keycode, true), ShortcutDisposition::Consume);
+            assert_eq!(engine.observe(keycode, false), ShortcutDisposition::Consume);
+        }
+    }
+
+    #[test]
+    fn vt_switch_requires_exactly_ctrl_and_alt() {
+        let mut engine = ShortcutEngine::from_file(&default_shortcut_file()).unwrap();
+
+        assert_eq!(
+            engine.observe(KEY_LEFT_CTRL, true),
+            ShortcutDisposition::Forward
+        );
+        assert_eq!(engine.observe(KEY_F1, true), ShortcutDisposition::Forward);
+        assert_eq!(engine.observe(KEY_F1, false), ShortcutDisposition::Forward);
+        assert_eq!(
+            engine.observe(KEY_LEFT_ALT, true),
+            ShortcutDisposition::Forward
+        );
+        assert_eq!(
+            engine.observe(KEY_LEFT_SHIFT, true),
+            ShortcutDisposition::Forward
+        );
+        assert_eq!(engine.observe(KEY_F1, true), ShortcutDisposition::Forward);
+    }
 
     #[test]
     fn v4_migration_relocates_the_legacy_maximize_binding_for_navigation() {
@@ -2344,5 +2432,20 @@ mod tests {
         );
         engine.pass_through_key(2);
         assert_eq!(engine.observe(2, false), ShortcutDisposition::Forward);
+    }
+
+    #[test]
+    fn super_pointer_axis_suppresses_the_modifier_tap_action() {
+        let mut engine = ShortcutEngine::from_file(&default_shortcut_file()).unwrap();
+
+        assert_eq!(
+            engine.observe(KEY_LEFT_META, true),
+            ShortcutDisposition::Consume
+        );
+        engine.note_pointer_axis();
+        assert_eq!(
+            engine.observe(KEY_LEFT_META, false),
+            ShortcutDisposition::Consume
+        );
     }
 }

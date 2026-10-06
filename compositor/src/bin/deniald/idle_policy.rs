@@ -453,12 +453,16 @@ impl IdlePolicy {
         self.wake_blanked_outputs()
     }
 
-    pub(super) fn evaluate(
+    pub(super) fn evaluate<I>(
         &mut self,
         now: Instant,
         inhibited: bool,
-        outputs: impl IntoIterator<Item = (OutputId, bool)>,
-    ) -> IdlePolicyActions {
+        outputs: I,
+    ) -> IdlePolicyActions
+    where
+        I: IntoIterator<Item = (OutputId, bool)>,
+        I::IntoIter: Clone,
+    {
         if inhibited {
             if !std::mem::replace(&mut self.inhibited, true) {
                 self.reset_idle_interval(now);
@@ -482,13 +486,9 @@ impl IdlePolicy {
             self.reset_idle_interval(now);
         }
 
-        let outputs = outputs.into_iter().collect::<Vec<_>>();
-        let live_outputs = outputs
-            .iter()
-            .map(|(output, _)| *output)
-            .collect::<BTreeSet<_>>();
+        let outputs = outputs.into_iter();
         self.blanked_outputs
-            .retain(|output| live_outputs.contains(output));
+            .retain(|blanked| outputs.clone().any(|(output, _)| output == *blanked));
         let elapsed = now.saturating_duration_since(self.last_activity);
         let mut actions = IdlePolicyActions::default();
 

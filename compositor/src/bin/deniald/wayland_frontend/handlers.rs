@@ -185,6 +185,7 @@ impl WaylandClientBudget {
             budget: Some(Arc::clone(self)),
             surfaces: Mutex::new(HashSet::new()),
             reservation_live: AtomicBool::new(true),
+            peer_pid: None,
             peer_uid: None,
         })
     }
@@ -260,6 +261,7 @@ fn opaque_regions_signature(regions: Option<&[Rectangle<i32, Logical>]>) -> (usi
 }
 
 pub(super) struct DenialClientState {
+    pub(super) peer_pid: Option<i32>,
     pub(super) peer_uid: Option<u32>,
     compositor_state: CompositorClientState,
     budget: Option<Arc<WaylandClientBudget>>,
@@ -274,6 +276,7 @@ impl Default for DenialClientState {
             budget: None,
             surfaces: Mutex::new(HashSet::new()),
             reservation_live: AtomicBool::new(true),
+            peer_pid: None,
             peer_uid: None,
         }
     }
@@ -353,7 +356,16 @@ impl Drop for DenialClientState {
 impl ClientData for DenialClientState {
     fn initialized(&self, _client_id: ClientId) {}
 
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {
+    fn disconnected(&self, client_id: ClientId, reason: DisconnectReason) {
+        if let DisconnectReason::ProtocolError(error) = &reason {
+            warn!(
+                ?client_id,
+                peer_pid = ?self.peer_pid,
+                peer_uid = ?self.peer_uid,
+                ?error,
+                "Wayland client disconnected after a protocol error"
+            );
+        }
         // ClientData may remain alive after the connection disappears. Return
         // both reservations promptly; Drop is an idempotent fallback.
         self.release_reservations();
@@ -722,6 +734,234 @@ fn install_surface_readiness_hook(surface: &WlSurface) {
     });
 }
 
+#[derive(Default)]
+struct LayerSurfaceUnmapCompatibilityState {
+    restore_after_commit: Mutex<Option<LayerSurfaceCachedState>>,
+    last_valid_client_state: Mutex<Option<LayerSurfaceCachedState>>,
+}
+
+const fn should_preserve_layer_surface_client_state(
+    is_layer_surface: bool,
+    had_acked_configure: bool,
+    removes_buffer: bool,
+) -> bool {
+    is_layer_surface && had_acked_configure && removes_buffer
+}
+
+fn layer_surface_client_state_is_valid(state: LayerSurfaceCachedState) -> bool {
+    (state.size.w != 0 || state.anchor.anchored_horizontally())
+        && (state.size.h != 0 || state.anchor.anchored_vertically())
+        && state
+            .exclusive_edge
+            .is_none_or(|edge| state.anchor.contains(edge))
+}
+
+const fn should_restore_layer_surface_client_state(
+    is_layer_surface: bool,
+    pending_is_valid: bool,
+    current_is_mapped: bool,
+    attaches_buffer: bool,
+    has_last_valid_state: bool,
+) -> bool {
+    is_layer_surface
+        && !pending_is_valid
+        && !current_is_mapped
+        && !attaches_buffer
+        && has_last_valid_state
+}
+
+/// Keep the client-controlled layer geometry across an unmap commit.
+///
+/// Smithay resets all cached layer state when a mapped surface attaches a null
+/// buffer. Qt may issue one more bufferless wl_surface.commit while destroying
+/// that window. With Smithay's default state, the second commit is rejected as
+/// a 0x0 layer surface without opposite anchors and the protocol error tears
+/// down every window owned by the client. wlroots retains the client geometry
+/// across this transition, which is the behavior Qt layer-shell clients expect.
+///
+/// Preserve a valid client geometry while a mapped surface detaches its buffer,
+/// and reuse the last such geometry for later bufferless teardown commits. Qt
+/// can destroy the layer-surface object before its final wl_surface commit;
+/// Smithay resets the cached role state at object destruction, so that final
+/// commit would otherwise look like a new invalid 0x0 layer surface.
+///
+/// Initial invalid commits, invalid changes to mapped surfaces, and remaps that
+/// attach a new buffer still go through Smithay's normal strict validation.
+fn install_layer_surface_unmap_compatibility_hooks(surface: &WlSurface) {
+    with_states(surface, |states| {
+        states
+            .data_map
+            .insert_if_missing_threadsafe(LayerSurfaceUnmapCompatibilityState::default);
+    });
+
+    add_pre_commit_hook::<RuntimeState, _>(surface, |_state, _display, surface| {
+        let is_layer_surface =
+            smithay::wayland::compositor::get_role(surface) == Some(LAYER_SURFACE_ROLE);
+        if !is_layer_surface {
+            return;
+        }
+        let (pending, current_is_mapped, removes_buffer, attaches_buffer) =
+            with_states(surface, |states| {
+                let (removes_buffer, attaches_buffer) = {
+                    let mut attributes = states.cached_state.get::<SurfaceAttributes>();
+                    (
+                        matches!(
+                            attributes.pending().buffer.as_ref(),
+                            Some(BufferAssignment::Removed)
+                        ),
+                        matches!(
+                            attributes.pending().buffer.as_ref(),
+                            Some(BufferAssignment::NewBuffer(_))
+                        ),
+                    )
+                };
+                let mut layer_state = states.cached_state.get::<LayerSurfaceCachedState>();
+                (
+                    *layer_state.pending(),
+                    layer_state.current().last_acked.is_some(),
+                    removes_buffer,
+                    attaches_buffer,
+                )
+            });
+
+        let pending_is_valid = layer_surface_client_state_is_valid(pending);
+        let replacement = with_states(surface, |states| {
+            let compatibility = states
+                .data_map
+                .get::<LayerSurfaceUnmapCompatibilityState>()
+                .expect("missing layer-surface unmap compatibility state");
+            let mut last_valid = compatibility
+                .last_valid_client_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if pending_is_valid {
+                let mut valid = pending;
+                valid.last_acked = None;
+                *last_valid = Some(valid);
+                None
+            } else if should_restore_layer_surface_client_state(
+                is_layer_surface,
+                pending_is_valid,
+                current_is_mapped,
+                attaches_buffer,
+                last_valid.is_some(),
+            ) {
+                *last_valid
+            } else {
+                None
+            }
+        });
+
+        if let Some(replacement) = replacement {
+            with_states(surface, |states| {
+                let mut layer_state = states.cached_state.get::<LayerSurfaceCachedState>();
+                *layer_state.pending() = replacement;
+            });
+            debug!(
+                surface_id = ?surface.id(),
+                "restored layer-shell client state for a bufferless teardown commit"
+            );
+        }
+
+        let effective = replacement.unwrap_or(pending);
+        let preserved = should_preserve_layer_surface_client_state(
+            is_layer_surface,
+            effective.last_acked.is_some(),
+            removes_buffer,
+        )
+        .then(|| {
+            let mut preserved = effective;
+            preserved.last_acked = None;
+            preserved
+        });
+        if let Some(preserved) = preserved {
+            with_states(surface, |states| {
+                let compatibility = states
+                    .data_map
+                    .get::<LayerSurfaceUnmapCompatibilityState>()
+                    .expect("missing layer-surface unmap compatibility state");
+                *compatibility
+                    .restore_after_commit
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(preserved);
+            });
+        }
+    });
+
+    add_post_commit_hook::<RuntimeState, _>(surface, |_state, _display, surface| {
+        let preserved = with_states(surface, |states| {
+            states
+                .data_map
+                .get::<LayerSurfaceUnmapCompatibilityState>()
+                .expect("missing layer-surface unmap compatibility state")
+                .restore_after_commit
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+        });
+        let Some(preserved) = preserved else {
+            return;
+        };
+        with_states(surface, |states| {
+            let mut layer_state = states.cached_state.get::<LayerSurfaceCachedState>();
+            *layer_state.current() = preserved;
+            *layer_state.pending() = preserved;
+        });
+        debug!(
+            surface_id = ?surface.id(),
+            "preserved layer-shell client state across surface unmap"
+        );
+    });
+}
+
+#[cfg(test)]
+mod layer_surface_unmap_compatibility_tests {
+    use super::*;
+    use smithay::wayland::shell::wlr_layer::Anchor;
+
+    #[test]
+    fn preserves_only_mapped_layer_surface_unmaps() {
+        assert!(should_preserve_layer_surface_client_state(true, true, true));
+        assert!(!should_preserve_layer_surface_client_state(
+            false, true, true
+        ));
+        assert!(!should_preserve_layer_surface_client_state(
+            true, false, true
+        ));
+        assert!(!should_preserve_layer_surface_client_state(
+            true, true, false
+        ));
+    }
+
+    #[test]
+    fn validates_zero_size_only_with_opposite_anchors() {
+        let mut state = LayerSurfaceCachedState::default();
+        assert!(!layer_surface_client_state_is_valid(state));
+
+        state.anchor = Anchor::LEFT | Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM;
+        assert!(layer_surface_client_state_is_valid(state));
+    }
+
+    #[test]
+    fn restores_only_bufferless_unmapped_teardown_commits() {
+        assert!(should_restore_layer_surface_client_state(
+            true, false, false, false, true
+        ));
+        assert!(!should_restore_layer_surface_client_state(
+            true, false, true, false, true
+        ));
+        assert!(!should_restore_layer_surface_client_state(
+            true, false, false, true, true
+        ));
+        assert!(!should_restore_layer_surface_client_state(
+            true, false, false, false, false
+        ));
+        assert!(!should_restore_layer_surface_client_state(
+            true, true, false, false, true
+        ));
+    }
+}
+
 impl CompositorHandler for RuntimeState {
     fn compositor_state(&mut self) -> &mut CompositorState {
         &mut self
@@ -732,8 +972,8 @@ impl CompositorHandler for RuntimeState {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        if let Some(state) = client.get_data::<XWaylandClientData>() {
-            return &state.compositor_state;
+        if let Some(state) = xwayland::client_compositor_state(client) {
+            return state;
         }
         &client
             .get_data::<DenialClientState>()
@@ -770,9 +1010,7 @@ impl CompositorHandler for RuntimeState {
             );
             return;
         }
-        if client.get_data::<DenialClientState>().is_none()
-            && client.get_data::<XWaylandClientData>().is_none()
-        {
+        if client.get_data::<DenialClientState>().is_none() && !xwayland::is_client(&client) {
             warn!(client_id = ?client.id(), "disconnecting client with unknown Wayland state");
             client.kill(
                 &display_handle,
@@ -786,6 +1024,7 @@ impl CompositorHandler for RuntimeState {
             return;
         }
         install_surface_readiness_hook(surface);
+        install_layer_surface_unmap_compatibility_hooks(surface);
         with_states(surface, |states| {
             states
                 .data_map
@@ -908,6 +1147,8 @@ impl CompositorHandler for RuntimeState {
         #[cfg(feature = "flutter")]
         let mut client_sized_window_state = None;
         #[cfg(feature = "flutter")]
+        let mut auxiliary_toplevel_state = None;
+        #[cfg(feature = "flutter")]
         let mut committed_window_metadata_changed = false;
         let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
         #[cfg(feature = "flutter")]
@@ -1001,8 +1242,18 @@ impl CompositorHandler for RuntimeState {
                     frontend.configure_mobile_window(&window);
                 }
                 frontend.reconcile_committed_window_geometry(&window);
+                if root_committed {
+                    if buffer_removed {
+                        frontend.forget_xdg_transient_window_placement(&window);
+                    } else {
+                        frontend.reconcile_xdg_transient_window_placement(&window);
+                    }
+                }
                 #[cfg(feature = "flutter")]
                 let client_sized_target = frontend.reconcile_client_sized_window_placement(&window);
+                #[cfg(feature = "flutter")]
+                let auxiliary_toplevel_target =
+                    frontend.reconcile_initial_auxiliary_toplevel_placement(&window);
                 #[cfg(feature = "flutter")]
                 {
                     let current_target_geometry = frontend.window_geometry_target(&window);
@@ -1015,7 +1266,8 @@ impl CompositorHandler for RuntimeState {
                     }
                     committed_window_metadata_changed |= previous_content_geometry
                         != window.geometry()
-                        || previous_target_geometry != current_target_geometry;
+                        || previous_target_geometry != current_target_geometry
+                        || auxiliary_toplevel_target.is_some();
                 }
                 if root_committed {
                     if buffer_removed {
@@ -1031,7 +1283,11 @@ impl CompositorHandler for RuntimeState {
                 }
                 #[cfg(feature = "flutter")]
                 if let Some(target) = client_sized_target {
-                    client_sized_window_state = Some((window, target));
+                    client_sized_window_state = Some((window.clone(), target));
+                }
+                #[cfg(feature = "flutter")]
+                if let Some(target) = auxiliary_toplevel_target {
+                    auxiliary_toplevel_state = Some((window, target));
                 }
                 #[cfg(not(feature = "flutter"))]
                 let _ = frontend.reconcile_client_sized_window_placement(&window);
@@ -1099,6 +1355,17 @@ impl CompositorHandler for RuntimeState {
                 target,
                 WindowPlacementPhase::End,
                 WindowPlacementChange::Resize,
+            );
+        }
+        #[cfg(feature = "flutter")]
+        if let Some((window, target)) = auxiliary_toplevel_state {
+            queue_client_window_placement_for_monitor(
+                self,
+                &window,
+                target,
+                target,
+                WindowPlacementPhase::End,
+                WindowPlacementChange::Move,
             );
         }
         #[cfg(feature = "flutter")]
@@ -1274,13 +1541,9 @@ impl SeatHandler for RuntimeState {
         let focused_surface = focused
             .and_then(WaylandFocus::wl_surface)
             .map(|surface| surface.into_owned());
-        let focus_kind = match focused {
-            Some(KeyboardFocusTarget::Wayland(_)) => super::SeatFocusKind::Wayland,
-            Some(KeyboardFocusTarget::X11(_)) => super::SeatFocusKind::Xwayland,
-            #[cfg(feature = "flutter")]
-            Some(KeyboardFocusTarget::Flutter) => super::SeatFocusKind::None,
-            None => super::SeatFocusKind::None,
-        };
+        let focus_kind = focused
+            .map(KeyboardFocusTarget::seat_focus_kind)
+            .unwrap_or(super::SeatFocusKind::None);
         let input_method_changed = {
             let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
             frontend.text_input.set_keyboard_focus(
@@ -1379,13 +1642,12 @@ impl SelectionHandler for RuntimeState {
             .map(SelectionSource::mime_types)
             .unwrap_or_default();
         clipboard_io::observe_selection(self, clipboard_io::CaptureOwner::Wayland, &mime_types);
-        if let Some(xwm) = self
+        if let Err(error) = self
             .wayland
             .as_mut()
             .expect("missing Wayland frontend")
-            .xwm
-            .as_mut()
-            && let Err(error) = xwm.new_selection(selection, source.map(|_| mime_types))
+            .xwayland
+            .publish_selection(selection, source.map(|_| mime_types))
         {
             warn!(%error, "could not publish Wayland clipboard to Xwayland");
         }
@@ -1410,13 +1672,12 @@ impl SelectionHandler for RuntimeState {
             clipboard_io::send_retained_selection(self, item_id, &mime_type, fd);
             return;
         }
-        if let Some(xwm) = self
+        if let Err(error) = self
             .wayland
             .as_mut()
             .expect("missing Wayland frontend")
-            .xwm
-            .as_mut()
-            && let Err(error) = xwm.send_selection(selection, mime_type, fd)
+            .xwayland
+            .send_selection(selection, mime_type, fd)
         {
             warn!(%error, "could not transfer Xwayland clipboard data to Wayland");
         }
@@ -1430,6 +1691,26 @@ impl DataDeviceHandler for RuntimeState {
             .as_mut()
             .expect("missing Wayland frontend")
             .data_device_state
+    }
+}
+
+impl ExtDataControlHandler for RuntimeState {
+    fn data_control_state(&mut self) -> &mut ExtDataControlState {
+        &mut self
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .ext_data_control_state
+    }
+}
+
+impl WlrDataControlHandler for RuntimeState {
+    fn data_control_state(&mut self) -> &mut WlrDataControlState {
+        &mut self
+            .wayland
+            .as_mut()
+            .expect("missing Wayland frontend")
+            .wlr_data_control_state
     }
 }
 
@@ -1495,6 +1776,8 @@ impl XdgShellHandler for RuntimeState {
             .expect("seat has no keyboard");
         let initial_activation = {
             let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
+            frontend.register_window(&focus);
+            frontend.defer_initial_auxiliary_toplevel_placement(&focus);
             let window = Window::new_wayland_window(surface);
             let offset = frontend.next_window_offset;
             frontend.next_window_offset = (frontend.next_window_offset + 48).min(384);
@@ -1539,6 +1822,14 @@ impl XdgShellHandler for RuntimeState {
         self.scene_sync.mark_dirty();
     }
 
+    fn parent_changed(&mut self, surface: ToplevelSurface) {
+        let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
+        if let Some(window) = frontend.window_for_root_surface(surface.wl_surface()) {
+            frontend.reconcile_xdg_parent_change(&window);
+        }
+        self.scene_sync.mark_dirty();
+    }
+
     fn app_id_changed(&mut self, surface: ToplevelSurface) {
         let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
         if let Some(window) = frontend.window_for_root_surface(surface.wl_surface()) {
@@ -1565,11 +1856,16 @@ impl XdgShellHandler for RuntimeState {
             state.geometry = positioner.get_geometry();
             state.positioner = positioner;
         });
-        self.wayland
-            .as_ref()
-            .expect("missing Wayland frontend")
-            .unconstrain_popup(&surface);
+        let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
+        frontend.unconstrain_popup(&surface);
+        #[cfg(feature = "flutter")]
+        // The new popup state becomes current only when the client acknowledges
+        // this configure and commits the popup surface. Queueing metadata on
+        // that surface publishes the committed position even when the client
+        // reuses its buffer without attaching or damaging it.
+        frontend.queue_surface_commit(surface.wl_surface(), SurfaceCommitKind::Metadata);
         surface.send_repositioned(token);
+        #[cfg(not(feature = "flutter"))]
         self.scene_sync.mark_dirty();
     }
 
@@ -1972,6 +2268,16 @@ impl XdgActivationHandler for RuntimeState {
         if activate_window(self, &window, SERIAL_COUNTER.next_serial()) {
             debug!(app_id = ?data.app_id, "honored XDG activation request");
         }
+    }
+}
+
+impl XdgForeignHandler for RuntimeState {
+    fn xdg_foreign_state(&mut self) -> &mut XdgForeignState {
+        &mut self
+            .wayland
+            .as_mut()
+            .expect("XDG foreign dispatched without Wayland frontend")
+            .xdg_foreign_state
     }
 }
 

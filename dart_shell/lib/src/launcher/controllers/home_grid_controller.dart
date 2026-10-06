@@ -445,12 +445,18 @@ bool _sameDesktopApp(DesktopApp a, DesktopApp b) {
       a.icon != b.icon ||
       a.iconPath != b.iconPath ||
       a.startupWmClass != b.startupWmClass ||
-      a.categories.length != b.categories.length) {
+      a.categories.length != b.categories.length ||
+      a.keywords.length != b.keywords.length) {
     return false;
   }
 
   for (var index = 0; index < a.categories.length; index += 1) {
     if (a.categories[index] != b.categories[index]) {
+      return false;
+    }
+  }
+  for (var index = 0; index < a.keywords.length; index += 1) {
+    if (a.keywords[index] != b.keywords[index]) {
       return false;
     }
   }

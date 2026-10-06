@@ -10,7 +10,7 @@ import '../theme/shell_theme.dart';
 import 'app_icon.dart';
 import 'retained_scale.dart';
 import 'retained_window_motion.dart';
-import 'window_hero.dart';
+import 'window_surface.dart';
 
 typedef LaunchTransitionCompleted = void Function(int requestId, int objectId);
 

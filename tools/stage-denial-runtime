@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export LC_ALL=C
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
@@ -103,6 +104,8 @@ session_target="$ROOT/packaging/denial-session.target"
 for directive in \
   'BindsTo=graphical-session.target' \
   'Before=graphical-session.target' \
+  'Wants=graphical-session-pre.target' \
+  'After=graphical-session-pre.target' \
   'Wants=xdg-desktop-autostart.target' \
   'Before=xdg-desktop-autostart.target'; do
   grep -Fqx "$directive" "$session_target" \

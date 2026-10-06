@@ -58,6 +58,7 @@ pub(super) fn initialize_placement() -> Option<String> {
     placement::initialize()
 }
 
+#[cfg(feature = "xwayland")]
 pub(super) fn with_application_affinity<T>(
     launch: impl FnOnce() -> io::Result<T>,
 ) -> io::Result<T> {

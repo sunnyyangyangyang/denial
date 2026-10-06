@@ -9,6 +9,7 @@ use smithay::backend::input::{
     KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, TouchEvent,
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
+use smithay::backend::session::Session;
 use smithay::backend::session::libseat::LibSeatSession;
 #[cfg(feature = "flutter")]
 use smithay::desktop::{WindowSurfaceType, utils::under_from_surface_tree};
@@ -357,6 +358,7 @@ pub(crate) fn dispatch_shell_keyboard(
 #[derive(Clone)]
 pub(super) struct ClientInputRoute {
     window: Option<smithay::desktop::Window>,
+    pub(super) layer_root: Option<WlSurface>,
     pub(super) surface: WlSurface,
     region: InputWindowRegion,
     layout_index: usize,
@@ -418,31 +420,49 @@ impl PointerConstraintEscape {
 
 #[cfg(feature = "flutter")]
 impl ClientInputRoute {
-    fn focus_at(&self, position: Point<f64, Logical>) -> (WlSurface, Point<f64, Logical>) {
+    fn mapped_position(&self, position: Point<f64, Logical>) -> Point<f64, Logical> {
         let scene_position = position - self.scene_origin;
         let (local_x, local_y) =
             self.region
                 .rect
                 .map_to(self.region.source_rect, scene_position.x, scene_position.y);
-        let local_point = Point::from((local_x, local_y));
+        Point::from((local_x, local_y))
+    }
+
+    fn focus_at_if_hit(
+        &self,
+        position: Point<f64, Logical>,
+    ) -> Option<(WlSurface, Point<f64, Logical>)> {
+        let local_point = self.mapped_position(position);
+        let (surface, local_origin) =
+            under_from_surface_tree(&self.surface, local_point, (0, 0), WindowSurfaceType::ALL)?;
+        Some((surface, self.global_origin(local_origin)))
+    }
+
+    fn focus_at(&self, position: Point<f64, Logical>) -> (WlSurface, Point<f64, Logical>) {
+        let local_point = self.mapped_position(position);
         let (surface, local_origin) =
             under_from_surface_tree(&self.surface, local_point, (0, 0), WindowSurfaceType::ALL)
                 .unwrap_or_else(|| (self.surface.clone(), (0, 0).into()));
+        (surface, self.global_origin(local_origin))
+    }
+
+    fn global_origin(&self, local_origin: Point<i32, Logical>) -> Point<f64, Logical> {
         let scale_x = self.region.rect.width / self.region.source_rect.width;
         let scale_y = self.region.rect.height / self.region.source_rect.height;
-        let global_origin = self.scene_origin
+        self.scene_origin
             + Point::from((
                 self.region.rect.x
                     + (f64::from(local_origin.x) - self.region.source_rect.x) * scale_x,
                 self.region.rect.y
                     + (f64::from(local_origin.y) - self.region.source_rect.y) * scale_y,
-            ));
-        (surface, global_origin)
+            ))
     }
 }
 
 #[cfg(feature = "flutter")]
 impl WaylandFrontend {
+    #[cfg(feature = "xwayland")]
     pub(super) fn invalidate_window_input_routes(&mut self, window: &smithay::desktop::Window) {
         if self
             .client_input_route_cache
@@ -465,7 +485,9 @@ impl WaylandFrontend {
     }
 
     fn window_id_for_input_surface(&self, surface: &WlSurface) -> Option<u64> {
-        let root = self.owning_toplevel_surface(surface)?;
+        let root = self
+            .owning_toplevel_surface(surface)
+            .or_else(|| self.layer_root_surface(surface).map(|(root, _)| root))?;
         self.surface_id(&root)
     }
 
@@ -693,7 +715,12 @@ impl WaylandFrontend {
         self.surfaces_by_id
             .get(&route.region.surface_id)
             .is_some_and(|surface| surface == &route.surface)
-            && (route.window.is_some() || self.input_method.owns_popup_surface(&route.surface))
+            && (route.window.is_some()
+                || route.layer_root.as_ref().is_some_and(|expected| {
+                    self.layer_root_surface(&route.surface)
+                        .is_some_and(|(current, _)| current == *expected)
+                })
+                || self.input_method.owns_popup_surface(&route.surface))
     }
 
     fn input_route(&mut self, position: Point<f64, Logical>) -> Option<&ClientInputRoute> {
@@ -729,6 +756,7 @@ impl WaylandFrontend {
         // check because windows are ordered front-to-back and may overlap.
         let cached_is_valid = self.client_input_route_cache.as_ref().is_some_and(|route| {
             region_accepts_input(&route.region, scene_position)
+                && route.focus_at_if_hit(position).is_some()
                 && layout
                     .windows
                     .get(..route.layout_index)
@@ -755,24 +783,41 @@ impl WaylandFrontend {
                 if self.input_method.owns_popup_surface(&surface) {
                     return Some(ClientInputRoute {
                         window: None,
+                        layer_root: None,
                         surface,
                         region: *region,
                         layout_index,
                         scene_origin: self.atlas_origin,
                     });
                 }
+                if let Some((layer_root, _)) = self.layer_root_surface(&surface) {
+                    if self.surface_id(&layer_root) != Some(region.window_id) {
+                        return None;
+                    }
+                    let route = ClientInputRoute {
+                        window: None,
+                        layer_root: Some(layer_root),
+                        surface,
+                        region: *region,
+                        layout_index,
+                        scene_origin: self.atlas_origin,
+                    };
+                    return route.focus_at_if_hit(position).is_some().then_some(route);
+                }
                 let window = self.window_for_id(region.window_id)?;
                 let root_surface = self.window_root_surface(&window)?;
                 if self.owning_toplevel_surface(&surface).as_ref() != Some(&root_surface) {
                     return None;
                 }
-                Some(ClientInputRoute {
+                let route = ClientInputRoute {
                     window: Some(window.clone()),
+                    layer_root: None,
                     surface,
                     region: *region,
                     layout_index,
                     scene_origin: self.atlas_origin,
-                })
+                };
+                route.focus_at_if_hit(position).is_some().then_some(route)
             });
 
         if let Some(route) = route {
@@ -932,6 +977,9 @@ fn process_keyboard_transition(
     if intercept_native_escape(state, keycode.raw(), key_state) {
         return true;
     }
+    if !state.secure_session_locked() {
+        focus_exclusive_layer_for_keyboard_event(state);
+    }
     if state.flutter_active {
         return process_flutter_keyboard_transition(state, keycode, key_state, time);
     }
@@ -942,6 +990,28 @@ fn process_keyboard_transition(
     }
     process_wayland_keyboard_transition(state, keycode, key_state, time);
     true
+}
+
+fn focus_exclusive_layer_for_keyboard_event(state: &mut RuntimeState) {
+    let Some((keyboard, focus)) = state.wayland.as_ref().and_then(|frontend| {
+        if frontend.text_input.shell_captures_keyboard() {
+            return None;
+        }
+        Some((
+            frontend.seat.get_keyboard()?,
+            frontend.exclusive_layer_keyboard_focus()?,
+        ))
+    }) else {
+        return;
+    };
+    if keyboard.current_focus().as_ref() != Some(&focus) {
+        super::focus::request_keyboard_focus(
+            state,
+            &keyboard,
+            Some(focus),
+            SERIAL_COUNTER.next_serial(),
+        );
+    }
 }
 
 fn configure_touchpad_device(
@@ -1199,6 +1269,32 @@ fn update_horizontal_layout_scroll(state: &mut RuntimeState, delta_x: f64) -> bo
         .wayland
         .as_mut()
         .and_then(|frontend| frontend.scroll_layout_horizontally(delta_x))
+    else {
+        return false;
+    };
+    let changed = !frame.placements.is_empty();
+    for (window, geometry) in frame.placements {
+        super::window_management::queue_transient_window_placement_for_monitor(
+            state,
+            &window,
+            geometry,
+            frame.monitor_geometry,
+            WindowPlacementPhase::Update,
+            WindowPlacementChange::Move,
+        );
+    }
+    if changed {
+        state.scene_sync.mark_dirty();
+    }
+    changed
+}
+
+#[cfg(feature = "flutter")]
+fn update_mouse_wheel_layout_scroll(state: &mut RuntimeState, vertical_delta: f64) -> bool {
+    let Some(frame) = state
+        .wayland
+        .as_mut()
+        .and_then(|frontend| frontend.scroll_layout_with_mouse_wheel(vertical_delta))
     else {
         return false;
     };
@@ -1865,6 +1961,11 @@ fn intercept_native_escape(
     let disposition = state
         .native_escape_shortcut
         .observe(evdev_keycode, key_state == KeyState::Pressed);
+    // VT switching is a seat-level escape, not a client, window, or shell
+    // action. Keep it available while the native lock screen owns input.
+    if let ShortcutDisposition::RequestVtSwitch(vt) = &disposition {
+        return execute_shortcut_disposition(state, ShortcutDisposition::RequestVtSwitch(*vt));
+    }
     #[cfg(feature = "flutter")]
     if state.secure_session_locked() {
         return match disposition {
@@ -1901,6 +2002,21 @@ pub(super) fn execute_shortcut_disposition(
     match disposition {
         ShortcutDisposition::Forward => false,
         ShortcutDisposition::Consume => true,
+        ShortcutDisposition::RequestVtSwitch(vt) => {
+            let result = if let Some(frontend) = state.wayland.as_mut() {
+                frontend
+                    .session
+                    .change_vt(vt)
+                    .map_err(|error| error.to_string())
+            } else {
+                Err("Wayland frontend is unavailable".to_owned())
+            };
+            match result {
+                Ok(()) => info!(vt, "requested virtual terminal switch"),
+                Err(error) => warn!(%error, vt, "could not switch virtual terminal"),
+            }
+            true
+        }
         ShortcutDisposition::RequestShutdown => {
             state
                 .lifecycle

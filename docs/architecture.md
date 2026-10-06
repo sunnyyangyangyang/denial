@@ -1,16 +1,16 @@
 # Denial architecture
 
 Denial is a Flutter-native Wayland compositor. The native compositor is Rust;
-Smithay supplies the Wayland, DRM/KMS, libinput, libseat, udev and Xwayland
-foundations, while Flutter owns the shell scene that combines client surfaces
-with native UI.
+Smithay supplies the Wayland, DRM/KMS, libinput, libseat and udev foundations,
+plus an optional Xwayland integration. Flutter owns the shell scene that
+combines client surfaces with native UI.
 
 ## Runtime shape
 
 ```text
 deniald
   Rust compositor
-    Smithay Wayland frontend and Xwayland
+    Smithay Wayland frontend and optional Xwayland
     libseat/libinput/udev session and input
     GBM/EGL rendering and Volition atomic DRM/KMS presentation
     window, focus, grab and buffer lifetime state
@@ -153,12 +153,16 @@ v3](protocol/text-input-v3.md).
 
 ## Settings
 
-Rust is the sole owner of the versioned, pretty-printed settings document at
-`$XDG_CONFIG_HOME/denial/settings.json` (or
+Rust is the persistence authority for the versioned, pretty-printed settings
+document at `$XDG_CONFIG_HOME/denial/settings.json` (or
 `$HOME/.config/denial/settings.json`). It migrates older documents, protects
-native-owned sections, revision-checks every mutation, rejects concurrent
-external edits, and persists through a mode-`0600` temporary file plus atomic
-rename.
+native-owned sections, revision-checks every mutation, and persists through a
+mode-`0600` temporary file plus atomic rename. It watches the containing
+directory so editors that replace the file atomically are supported. A valid
+external edit is assigned the next authoritative revision, applied to native
+runtime state, and published like a Settings application change. Invalid edits
+remain on disk while the last known-good configuration stays active; deleting
+the file restores and recreates the defaults.
 
 Settings runs as a separate Flutter Wayland process (`denial-settings`). It
 owns only its application widget tree and talks to `deniald` through control

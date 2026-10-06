@@ -623,29 +623,6 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String frameAppRendering(String title) {
-    return '应用 · $title · 渲染';
-  }
-
-  @override
-  String frameAppWaiting(String title) {
-    return '应用 · $title · 等待';
-  }
-
-  @override
-  String frameImportedStats(
-    String average,
-    String maximum,
-    int overBudget,
-    int samples,
-  ) {
-    return '平均 $average  最大 $maximum  超预算 $overBudget  样本 $samples';
-  }
-
-  @override
-  String get frameImportedStatsUnavailable => '平均 --.-  最大 --.-  超预算 -  样本 -';
-
-  @override
   String frameMilliseconds(String value) {
     return '约 $value 毫秒';
   }
@@ -998,6 +975,16 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String outputBrightnessSemantics(String outputName) {
     return '$outputName 亮度';
+  }
+
+  @override
+  String outputSoftwareDimmingSemantics(String outputName) {
+    return '$outputName 软件调光';
+  }
+
+  @override
+  String outputSoftwareDimmingUnavailable(String outputName) {
+    return '$outputName 软件调光（不可用）';
   }
 
   @override
@@ -1689,7 +1676,52 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsColorPickerDone => '完成';
 
   @override
-  String get settingsColorPickerInstructions => '拖动以选择颜色。使用方向键进行微调。';
+  String get settingsColorPickerInstructions => '可直观选择，也可输入精确的颜色值。';
+
+  @override
+  String get settingsColorInputTitle => '颜色值';
+
+  @override
+  String get settingsColorInputRgb => 'RGB';
+
+  @override
+  String get settingsColorInputHsl => 'HSL';
+
+  @override
+  String get settingsColorInputHex => 'HEX';
+
+  @override
+  String get settingsColorInputRed => '红色';
+
+  @override
+  String get settingsColorInputGreen => '绿色';
+
+  @override
+  String get settingsColorInputBlue => '蓝色';
+
+  @override
+  String get settingsColorInputHue => '色相';
+
+  @override
+  String get settingsColorInputSaturation => '饱和度';
+
+  @override
+  String get settingsColorInputLightness => '亮度';
+
+  @override
+  String get settingsColorInputHexValue => '十六进制颜色';
+
+  @override
+  String get settingsColorInputNudgeHint => '使用 ↑↓ 微调 · 按住 Shift 调整 10';
+
+  @override
+  String get settingsColorInputRgbError => 'RGB 值须在 0 到 255 之间。';
+
+  @override
+  String get settingsColorInputHslError => 'H 须为 0–360，S/L 须为 0–100。';
+
+  @override
+  String get settingsColorInputHexError => '请输入 3 位或 6 位十六进制数。';
 
   @override
   String get settingsColorPickerReset => '重置';
@@ -1801,6 +1833,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsDisplayArrangementTitle => '显示器配置';
 
   @override
+  String get settingsDisplayEnabled => '使用此显示器';
+
+  @override
+  String get settingsDisplayEnabledDescription => '将此显示器纳入桌面。必须至少启用一个显示器。';
+
+  @override
   String get settingsDisplayBrightnessDescription => '调节主显示器亮度。';
 
   @override
@@ -1841,7 +1879,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsDisplayPrimaryHint =>
-      'Shell 界面会在主显示器上打开。自动模式会使用刷新率最高的已连接显示器。';
+      'Shell 界面会在主显示器上打开。自动模式会使用刷新率最高的已启用显示器。';
 
   @override
   String get settingsDisplayRefreshRate => '刷新率';
@@ -1856,13 +1894,29 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsDisplayRotationNormal => '横向';
 
   @override
-  String get settingsDisplayRotation90 => '顺时针 90°';
+  String get settingsDisplayRotation90 => '逆时针 90°';
 
   @override
   String get settingsDisplayRotation180 => '倒置';
 
   @override
-  String get settingsDisplayRotation270 => '逆时针 90°';
+  String get settingsDisplayRotation270 => '顺时针 90°';
+
+  @override
+  String get settingsDisplayScrollingLayoutAxis => '滚动布局轴';
+
+  @override
+  String get settingsDisplayScrollingLayoutAxisDescription =>
+      '选择滚动窗口在此显示器上的排列方向。';
+
+  @override
+  String get settingsDisplayScrollingLayoutAxisAuto => '自动（跟随旋转）';
+
+  @override
+  String get settingsDisplayScrollingLayoutAxisHorizontal => '横向';
+
+  @override
+  String get settingsDisplayScrollingLayoutAxisVertical => '纵向';
 
   @override
   String get settingsDisplayScale => '缩放';
@@ -2396,27 +2450,25 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsShortcutActionSwapDown => '向下交换窗口';
 
   @override
-  String get settingsShortcutActionPreviousWorkspace => 'Previous workspace';
+  String get settingsShortcutActionPreviousWorkspace => '上一个工作区';
 
   @override
-  String get settingsShortcutActionNextWorkspace => 'Next workspace';
+  String get settingsShortcutActionNextWorkspace => '下一个工作区';
 
   @override
-  String get settingsShortcutActionMoveToPreviousWorkspace =>
-      'Move window to previous workspace';
+  String get settingsShortcutActionMoveToPreviousWorkspace => '将窗口移至上一个工作区';
 
   @override
-  String get settingsShortcutActionMoveToNextWorkspace =>
-      'Move window to next workspace';
+  String get settingsShortcutActionMoveToNextWorkspace => '将窗口移至下一个工作区';
 
   @override
   String settingsShortcutActionSwitchWorkspace(int workspace) {
-    return 'Switch to workspace $workspace';
+    return '切换到工作区 $workspace';
   }
 
   @override
   String settingsShortcutActionMoveToWorkspace(int workspace) {
-    return 'Move window to workspace $workspace';
+    return '将窗口移至工作区 $workspace';
   }
 
   @override
@@ -2430,7 +2482,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsWindowLayoutDescription =>
-      '堆叠允许窗口相互重叠。平铺动态划分桌面。滚动平铺将窗口排列成跟随焦点的长带；显示器旋转 90° 或 270° 时，长带会改为纵向。';
+      '堆叠允许窗口相互重叠。平铺动态划分桌面。滚动平铺将窗口排列成跟随焦点的长带；其方向可按显示器配置，默认跟随显示器旋转。';
 
   @override
   String get settingsWindowLayoutDwindle => '平铺';
@@ -2443,6 +2495,25 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsWindowLayoutTitle => '窗口布局';
+
+  @override
+  String get settingsScrollingLayoutWheelTitle => 'Super + 鼠标滚轮';
+
+  @override
+  String get settingsScrollingLayoutWheelDescription =>
+      '按住 Super 并滚动鼠标滚轮来移动窗口带。';
+
+  @override
+  String get settingsScrollingLayoutWheelSpeed => '滚轮速度';
+
+  @override
+  String get settingsScrollingLayoutWheelUpDirection => '滚轮向上移动';
+
+  @override
+  String get settingsScrollingLayoutWheelUpLeft => '向左';
+
+  @override
+  String get settingsScrollingLayoutWheelUpRight => '向右';
 
   @override
   String get settingsWorkspacesTitle => 'Workspaces';
@@ -3282,6 +3353,14 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get wallpaperFinding => '正在查找壁纸…';
+
+  @override
+  String wallpaperFolderHint(String directory) {
+    return '将您自己的壁纸添加到 $directory。';
+  }
+
+  @override
+  String get wallpaperImageServerUnavailable => '在线壁纸不可用。本地壁纸仍可使用。';
 
   @override
   String get wallpaperMobileBackToSelection => '返回壁纸选择';

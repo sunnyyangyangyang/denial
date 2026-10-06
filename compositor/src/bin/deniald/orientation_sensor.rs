@@ -34,8 +34,8 @@ impl Orientation {
             // iio-sensor-proxy names the physical edge which points upward.
             // The desktop must turn in the opposite direction to remain
             // upright in panel coordinates.
-            Self::LeftUp => OutputTransform::Rotate270,
-            Self::RightUp => OutputTransform::Rotate90,
+            Self::LeftUp => OutputTransform::Rotate90,
+            Self::RightUp => OutputTransform::Rotate270,
         }
     }
 
@@ -156,4 +156,21 @@ fn publish(
     events.send(orientation).map_err(|_| ())?;
     *published = Some(orientation);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn physical_edge_orientation_uses_wayland_rotation_direction() {
+        assert_eq!(
+            Orientation::LeftUp.output_rotation(),
+            OutputTransform::Rotate90
+        );
+        assert_eq!(
+            Orientation::RightUp.output_rotation(),
+            OutputTransform::Rotate270
+        );
+    }
 }

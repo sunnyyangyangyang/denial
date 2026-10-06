@@ -5,6 +5,26 @@ import '../theme/motion.dart';
 import '../theme/shell_theme.dart';
 import '../widgets/shell_cursor.dart';
 
+/// Publishes whether a window has finished moving into overview.
+///
+/// The position animation owns this signal so preview emphasis follows its
+/// actual completion rather than a parallel timer that can drift or ignore an
+/// interrupted transition.
+class DesktopOverviewTransitionStatus
+    extends InheritedNotifier<ValueNotifier<bool>> {
+  const DesktopOverviewTransitionStatus({
+    super.key,
+    required ValueNotifier<bool> completed,
+    required super.child,
+  }) : super(notifier: completed);
+
+  static bool completedOf(BuildContext context) {
+    final status = context
+        .dependOnInheritedWidgetOfExactType<DesktopOverviewTransitionStatus>();
+    return status?.notifier?.value ?? true;
+  }
+}
+
 /// Pointer interaction for a window preview in the desktop overview.
 ///
 /// Overview previews retain the window's real layout size and use a paint
@@ -51,7 +71,7 @@ class DesktopOverviewPreviewInteraction extends StatefulWidget {
 
 class _DesktopOverviewPreviewInteractionState
     extends State<DesktopOverviewPreviewInteraction> {
-  static const double _hoverScale = 1.025;
+  static const double _emphasizedScale = 1.018;
 
   bool _hovered = false;
   Offset? _lastGlobalDragPosition;
@@ -108,10 +128,15 @@ class _DesktopOverviewPreviewInteractionState
 
   @override
   Widget build(BuildContext context) {
+    final overviewTransitionCompleted =
+        DesktopOverviewTransitionStatus.completedOf(context);
     final hovered =
         (widget.overview || widget.desktopWidget) &&
         !widget.dragging &&
         _hovered;
+    final emphasized = widget.overview
+        ? overviewTransitionCompleted && (widget.selected || hovered)
+        : hovered;
     final interactive =
         (widget.overviewActive && widget.overview) ||
         (!widget.overviewActive && widget.desktopWidget);
@@ -134,16 +159,10 @@ class _DesktopOverviewPreviewInteractionState
             onPanCancel: widget.overview ? _cancelDrag : null,
             child: AnimatedScale(
               duration: Motion.tile,
-              curve: hovered || widget.selected
+              curve: emphasized
                   ? Motion.md3EmphasizedDecelerate
                   : Motion.md3EmphasizedAccelerate,
-              scale: widget.selected
-                  ? _hoverScale
-                  : hovered
-                  ? widget.desktopWidget
-                        ? 1.018
-                        : _hoverScale
-                  : 1.0,
+              scale: emphasized ? _emphasizedScale : 1.0,
               child: Stack(
                 fit: StackFit.expand,
                 children: [
@@ -157,7 +176,7 @@ class _DesktopOverviewPreviewInteractionState
                           color: context.shellTheme.accent.withValues(
                             alpha: widget.selected ? 1.0 : 0.0,
                           ),
-                          width: widget.selected ? 4.0 : 0.0,
+                          width: widget.selected ? 2.0 : 0.0,
                         ),
                         borderRadius: BorderRadius.circular(
                           context.shellTheme.windowRadius,

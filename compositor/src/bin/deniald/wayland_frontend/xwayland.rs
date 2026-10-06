@@ -1,23 +1,31 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::os::fd::OwnedFd;
+use std::process::Stdio;
 
 use denial_core::topology::SCALE_BASE;
 use smithay::desktop::Window;
 use smithay::input::pointer::Focus;
+use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::reexports::wayland_server::{Client, DisplayHandle};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Size};
+use smithay::wayland::compositor::CompositorClientState;
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::selection::SelectionTarget;
 use smithay::wayland::selection::data_device::{
     clear_data_device_selection, current_data_device_selection_userdata,
     request_data_device_client_selection, set_data_device_selection,
 };
-use smithay::wayland::xwayland_keyboard_grab::XWaylandKeyboardGrabHandler;
+use smithay::wayland::xwayland_keyboard_grab::{
+    XWaylandKeyboardGrabHandler, XWaylandKeyboardGrabState,
+};
 use smithay::wayland::xwayland_shell::{XWaylandShellHandler, XWaylandShellState};
 use smithay::xwayland::xwm::settings::Value as XSettingValue;
 use smithay::xwayland::xwm::{Reorder, ResizeEdge, WmWindowProperty, XwmId};
-use smithay::xwayland::{X11Surface, X11Wm, XwmHandler};
+use smithay::xwayland::{
+    X11Surface, X11Wm, XWayland, XWaylandClientData, XWaylandEvent, XwmHandler,
+};
 use tracing::{debug, error, info, warn};
 
 #[cfg(feature = "flutter")]
@@ -32,11 +40,281 @@ use super::window_management::{
 use super::window_management::{apply_managed_minimize, queue_restored_window_state};
 use super::{
     KeyboardFocusTarget, MoveSurfaceGrab, ResizeEdges, ResizeSurfaceGrab, WindowIdentity,
-    clamp_window_geometry, constrain_dimension,
+    centered_transient_geometry, clamp_window_geometry, constrain_dimension,
 };
 
 const XWAYLAND_BASE_DPI: u32 = 96;
 const XWAYLAND_SCALE_MODE_ENV: &str = "DENIAL_XWAYLAND_SCALE_MODE";
+
+/// The complete optional Xwayland subsystem.
+///
+/// Keeping every X11-owned resource behind this boundary makes runtime
+/// disablement an absent value and compile-time disablement an empty facade.
+pub(crate) struct XWaylandState {
+    active: Option<ActiveXWayland>,
+}
+
+struct ActiveXWayland {
+    shell_state: XWaylandShellState,
+    _keyboard_grab_state: XWaylandKeyboardGrabState,
+    xwm: Option<X11Wm>,
+    #[cfg(feature = "flutter")]
+    xembed_tray: Option<super::super::xembed_tray::XEmbedTray>,
+    client: Client,
+    scale_mode: XWaylandScaleMode,
+    scale_120: u32,
+    display: u32,
+}
+
+impl XWaylandState {
+    pub(super) fn start(
+        enabled: bool,
+        event_loop: &mut EventLoop<'static, RuntimeState>,
+        display_handle: &DisplayHandle,
+        engine_scale_120: u32,
+        settings: &super::SettingsManager,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        if !enabled {
+            info!("Xwayland disabled for this session");
+            return Ok(Self { active: None });
+        }
+
+        let shell_state = XWaylandShellState::new::<RuntimeState>(display_handle);
+        let keyboard_grab_state = XWaylandKeyboardGrabState::new::<RuntimeState>(display_handle);
+        let scale_mode = scale_mode_from_environment();
+        let scale_120 = scale_for_engine(engine_scale_120, scale_mode);
+        let xwayland_args = ["-dpi".to_owned(), dpi(scale_120).to_string()];
+        let cursor_size = settings.cursor_size();
+        let mut environment = vec![(
+            OsString::from("XCURSOR_SIZE"),
+            OsString::from(cursor_size.to_string()),
+        )];
+        #[cfg(feature = "flutter")]
+        if let Some(cursor_environment) = crate::xcursor_sentinel::environment() {
+            environment.extend(
+                cursor_environment
+                    .into_iter()
+                    .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+            );
+        }
+
+        // Smithay has no pre-exec hook here. Temporarily widen this spawning
+        // thread, synchronized with our guard, so Xwayland gets the app domain.
+        let (source, client) = crate::cpu_scheduling::with_application_affinity(|| {
+            XWayland::spawn(
+                display_handle,
+                None,
+                environment,
+                xwayland_args,
+                true,
+                Stdio::null(),
+                Stdio::null(),
+                |_| {},
+            )
+        })?;
+        client
+            .get_data::<XWaylandClientData>()
+            .expect("Xwayland client is missing compositor state")
+            .compositor_state
+            .set_client_scale(client_scale(scale_120));
+        let xdisplay = source.display_number();
+        let xwm_loop_handle = event_loop.handle();
+        let xwm_display_handle = display_handle.clone();
+        let xwm_client = client.clone();
+        event_loop
+            .handle()
+            .insert_source(source, move |event, _, state| match event {
+                XWaylandEvent::Ready {
+                    x11_socket,
+                    display_number,
+                } => match X11Wm::start_wm(
+                    xwm_loop_handle.clone(),
+                    &xwm_display_handle,
+                    x11_socket,
+                    xwm_client.clone(),
+                ) {
+                    Ok(mut xwm) => {
+                        let Some(frontend) = state.wayland.as_mut() else {
+                            error!(
+                                display_number,
+                                "Xwayland became ready without Wayland frontend state"
+                            );
+                            return;
+                        };
+                        let cursor_size = frontend.settings.cursor_size();
+                        let active = frontend
+                            .xwayland
+                            .active
+                            .as_mut()
+                            .expect("Xwayland became ready after being disabled");
+                        if let Err(error) =
+                            publish_settings(&mut xwm, active.scale_120, cursor_size)
+                        {
+                            error!(%error, "could not publish Xwayland settings");
+                        }
+                        active.xwm = Some(xwm);
+                        #[cfg(feature = "flutter")]
+                        match super::super::xembed_tray::XEmbedTray::start(OsString::from(format!(
+                            ":{}",
+                            active.display
+                        ))) {
+                            Ok(tray) => active.xembed_tray = Some(tray),
+                            Err(error) => {
+                                warn!(%error, "could not start the XEmbed tray host")
+                            }
+                        }
+                        info!(
+                            display = %format_args!(":{display_number}"),
+                            scale = client_scale(active.scale_120),
+                            scale_mode = ?active.scale_mode,
+                            dpi = dpi(active.scale_120),
+                            cursor_size,
+                            "Xwayland is ready"
+                        );
+                        state.scene_sync.mark_dirty();
+                    }
+                    Err(error) => {
+                        error!(
+                            %error,
+                            display_number,
+                            "could not start the Xwayland window manager"
+                        );
+                    }
+                },
+                XWaylandEvent::Error => {
+                    error!(
+                        display = %format_args!(":{xdisplay}"),
+                        "Xwayland exited during startup"
+                    );
+                }
+            })?;
+
+        Ok(Self {
+            active: Some(ActiveXWayland {
+                shell_state,
+                _keyboard_grab_state: keyboard_grab_state,
+                xwm: None,
+                #[cfg(feature = "flutter")]
+                xembed_tray: None,
+                client,
+                scale_mode,
+                scale_120,
+                display: xdisplay,
+            }),
+        })
+    }
+
+    pub(super) fn display_name(&self) -> Option<OsString> {
+        self.active
+            .as_ref()
+            .map(|active| OsString::from(format!(":{}", active.display)))
+    }
+
+    pub(super) fn raise_windows(&mut self, windows: &[Window]) {
+        let Some(xwm) = self.active.as_mut().and_then(|active| active.xwm.as_mut()) else {
+            return;
+        };
+        for window in windows {
+            let Some(surface) = window.x11_surface() else {
+                continue;
+            };
+            // Override-redirect popups are absent from XWM's EWMH stack and
+            // are already placed by Xwayland at map time.
+            if surface.is_override_redirect() {
+                continue;
+            }
+            if let Err(error) = xwm.raise_window(surface) {
+                warn!(
+                    %error,
+                    window = surface.window_id(),
+                    "could not synchronize X11 stacking order"
+                );
+            }
+        }
+    }
+
+    pub(super) fn publish_selection(
+        &mut self,
+        selection: SelectionTarget,
+        mime_types: Option<Vec<String>>,
+    ) -> Result<(), String> {
+        let Some(xwm) = self.active.as_mut().and_then(|active| active.xwm.as_mut()) else {
+            return Ok(());
+        };
+        xwm.new_selection(selection, mime_types)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn send_selection(
+        &mut self,
+        selection: SelectionTarget,
+        mime_type: String,
+        fd: OwnedFd,
+    ) -> Result<(), String> {
+        self.active
+            .as_mut()
+            .and_then(|active| active.xwm.as_mut())
+            .ok_or_else(|| "Xwayland clipboard owner disappeared".to_owned())?
+            .send_selection(selection, mime_type, fd)
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(crate) fn take_xembed_event_signal(&self) -> bool {
+        self.active
+            .as_ref()
+            .and_then(|active| active.xembed_tray.as_ref())
+            .is_some_and(super::super::xembed_tray::XEmbedTray::take_event_signal)
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(crate) fn try_xembed_event(&self) -> Option<crate::xembed_tray_protocol::XEmbedTrayEvent> {
+        self.active
+            .as_ref()
+            .and_then(|active| active.xembed_tray.as_ref())
+            .and_then(super::super::xembed_tray::XEmbedTray::try_event)
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(crate) fn invoke_xembed(
+        &self,
+        command: crate::xembed_tray_protocol::XEmbedTrayCommand,
+    ) -> bool {
+        self.active
+            .as_ref()
+            .and_then(|active| active.xembed_tray.as_ref())
+            .is_some_and(|tray| tray.invoke(command))
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(crate) fn request_xembed_replay(&self) {
+        if let Some(tray) = self
+            .active
+            .as_ref()
+            .and_then(|active| active.xembed_tray.as_ref())
+        {
+            tray.request_replay();
+        }
+    }
+}
+
+pub(super) fn client_compositor_state(client: &Client) -> Option<&CompositorClientState> {
+    client
+        .get_data::<XWaylandClientData>()
+        .map(|data| &data.compositor_state)
+}
+
+pub(super) fn is_client(client: &Client) -> bool {
+    client.get_data::<XWaylandClientData>().is_some()
+}
+
+pub(super) fn surface_client_scale(surface: &WlSurface) -> Option<f64> {
+    surface.client().and_then(|client| {
+        client
+            .get_data::<XWaylandClientData>()
+            .map(|data| data.compositor_state.client_scale())
+    })
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum XWaylandScaleMode {
@@ -122,6 +400,14 @@ pub(super) fn publish_settings(
             "Gtk/CursorThemeSize".to_owned(),
             XSettingValue::Integer(i32::try_from(cursor_size).unwrap_or(i32::MAX)),
         ),
+        // XSettings is visible only to GTK's X11 backend. Publishing the XIM
+        // arm here leaves native Wayland clients on GTK's automatic context.
+        (
+            "Gtk/IMModule".to_owned(),
+            XSettingValue::String(
+                crate::settings::x11_gtk_input_method_backend_fallback().to_owned(),
+            ),
+        ),
         ("Xft/DPI".to_owned(), XSettingValue::Integer(xft_dpi)),
     ];
     #[cfg(feature = "flutter")]
@@ -139,29 +425,34 @@ impl super::WaylandFrontend {
         &mut self,
         engine_scale_120: u32,
     ) -> Result<bool, Box<dyn std::error::Error>> {
-        let scale_120 = scale_for_engine(engine_scale_120, self.xwayland_scale_mode);
-        if scale_120 == self.xwayland_scale_120 {
+        let Some(active) = self.xwayland.active.as_mut() else {
+            return Ok(false);
+        };
+        let scale_120 = scale_for_engine(engine_scale_120, active.scale_mode);
+        if scale_120 == active.scale_120 {
             return Ok(false);
         }
 
-        self.xwayland_client
-            .get_data::<smithay::xwayland::XWaylandClientData>()
+        active
+            .client
+            .get_data::<XWaylandClientData>()
             .ok_or("Xwayland client is missing compositor state")?
             .compositor_state
             .set_client_scale(client_scale(scale_120));
-        if let Some(xwm) = self.xwm.as_mut() {
+        if let Some(xwm) = active.xwm.as_mut() {
             publish_settings(xwm, scale_120, self.settings.cursor_size())?;
         }
-        self.xwayland_scale_120 = scale_120;
+        active.scale_120 = scale_120;
         Ok(true)
     }
 
-    pub(crate) fn publish_xwayland_settings(
-        &mut self,
-    ) -> Result<(), smithay::xwayland::xwm::SettingsError> {
+    #[cfg(feature = "flutter")]
+    pub(crate) fn publish_xwayland_settings(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let cursor_size = self.settings.cursor_size();
-        if let Some(xwm) = self.xwm.as_mut() {
-            publish_settings(xwm, self.xwayland_scale_120, cursor_size)?;
+        if let Some(active) = self.xwayland.active.as_mut()
+            && let Some(xwm) = active.xwm.as_mut()
+        {
+            publish_settings(xwm, active.scale_120, cursor_size)?;
         }
         Ok(())
     }
@@ -191,6 +482,10 @@ fn window_for_x11(state: &RuntimeState, surface: &X11Surface) -> Option<Window> 
 
 fn root_surface_for_x11(surface: &X11Surface) -> Option<WlSurface> {
     surface.wl_surface()
+}
+
+fn initial_map_activates(override_redirect: bool) -> bool {
+    !override_redirect
 }
 
 fn constrain_x11_size_to_output(
@@ -224,43 +519,10 @@ fn initial_managed_x11_geometry(
         requested.size = Size::from((800, 600));
     }
     requested = constrain_x11_size_to_output(requested, output);
-    let desired = Point::<i32, Logical>::from((
-        anchor
-            .loc
-            .x
-            .saturating_add((anchor.size.w.saturating_sub(requested.size.w)) / 2),
-        anchor
-            .loc
-            .y
-            .saturating_add((anchor.size.h.saturating_sub(requested.size.h)) / 2),
-    ));
-    let max_x = output
-        .loc
-        .x
-        .saturating_add(output.size.w)
-        .saturating_sub(requested.size.w);
-    let max_y = output
-        .loc
-        .y
-        .saturating_add(output.size.h)
-        .saturating_sub(requested.size.h);
-    requested.loc = Point::from((
-        desired.x.clamp(output.loc.x, max_x),
-        desired.y.clamp(output.loc.y, max_y),
-    ));
-    requested
+    centered_transient_geometry(requested.size, anchor, output)
 }
 
 #[cfg(any(feature = "flutter", test))]
-fn normalized_x11_opacity(opacity: Option<u32>) -> f32 {
-    opacity.map_or(1.0, |value| value as f32 / u32::MAX as f32)
-}
-
-#[cfg(feature = "flutter")]
-pub(super) fn x11_window_opacity(surface: &X11Surface) -> f32 {
-    normalized_x11_opacity(surface.opacity())
-}
-
 fn map_x11_window(state: &mut RuntimeState, surface: X11Surface, override_redirect: bool) {
     if window_for_x11(state, &surface).is_some() {
         return;
@@ -341,9 +603,14 @@ fn map_x11_window(state: &mut RuntimeState, surface: X11Surface, override_redire
                 None => (initial, None),
             }
         };
-        frontend
-            .space
-            .map_element(window.clone(), configured.loc, true);
+        // Override-redirect surfaces are client-owned popups. Mapping one may
+        // raise it visually, but must not clear the managed owner's active
+        // state or publish the popup itself as the active desktop window.
+        frontend.space.map_element(
+            window.clone(),
+            configured.loc,
+            initial_map_activates(override_redirect),
+        );
         frontend.update_window_output_membership(&window);
         if !override_redirect {
             frontend.announce_foreign_toplevel(&window);
@@ -518,12 +785,16 @@ impl XWaylandShellHandler for RuntimeState {
             .wayland
             .as_mut()
             .expect("missing Wayland frontend")
-            .xwayland_shell_state
+            .xwayland
+            .active
+            .as_mut()
+            .expect("Xwayland shell requested while Xwayland is disabled")
+            .shell_state
     }
 
     fn surface_associated(&mut self, _xwm: XwmId, wl_surface: WlSurface, surface: X11Surface) {
         let frontend = self.wayland.as_mut().expect("missing Wayland frontend");
-        let stable_id = frontend.register_surface(&wl_surface);
+        let stable_id = frontend.register_window(&wl_surface).get();
         let mapped_window = {
             frontend
                 .space
@@ -580,6 +851,10 @@ impl XwmHandler for RuntimeState {
         self.wayland
             .as_mut()
             .expect("missing Wayland frontend")
+            .xwayland
+            .active
+            .as_mut()
+            .expect("Xwayland handler requested while Xwayland is disabled")
             .xwm
             .as_mut()
             .expect("missing Xwayland window manager")
@@ -1005,9 +1280,24 @@ impl XwmHandler for RuntimeState {
     }
 
     fn disconnected(&mut self, _xwm: XwmId) {
-        if let Some(frontend) = self.wayland.as_mut() {
-            frontend.xwm = None;
+        if let Some(active) = self
+            .wayland
+            .as_mut()
+            .and_then(|frontend| frontend.xwayland.active.as_mut())
+        {
+            active.xwm = None;
         }
         warn!("lost the Xwayland window-manager connection");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::initial_map_activates;
+
+    #[test]
+    fn override_redirect_mapping_does_not_take_activation() {
+        assert!(initial_map_activates(false));
+        assert!(!initial_map_activates(true));
     }
 }

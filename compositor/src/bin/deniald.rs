@@ -39,6 +39,8 @@ mod frame_loop;
 #[cfg(feature = "flutter")]
 #[path = "deniald/frame_scheduler.rs"]
 mod frame_scheduler;
+#[path = "deniald/gamma_control.rs"]
+mod gamma_control;
 #[cfg(feature = "flutter")]
 #[path = "deniald/haptics.rs"]
 mod haptics;
@@ -94,6 +96,9 @@ mod session_activation;
 #[path = "deniald/settings.rs"]
 mod settings;
 #[cfg(feature = "flutter")]
+#[path = "deniald/settings_watch.rs"]
+mod settings_watch;
+#[cfg(feature = "flutter")]
 #[path = "deniald/sleep_transition.rs"]
 mod sleep_transition;
 #[path = "deniald/startup.rs"]
@@ -124,11 +129,17 @@ mod window_placement_store;
 #[path = "deniald/wire.rs"]
 mod wire;
 #[cfg(feature = "flutter")]
+#[path = "deniald/x11_input_method.rs"]
+mod x11_input_method;
+#[cfg(feature = "flutter")]
 #[path = "deniald/xcursor_sentinel.rs"]
 mod xcursor_sentinel;
-#[cfg(feature = "flutter")]
+#[cfg(all(feature = "flutter", feature = "xwayland"))]
 #[path = "deniald/xembed_tray.rs"]
 mod xembed_tray;
+#[cfg(feature = "flutter")]
+#[path = "deniald/xembed_tray_protocol.rs"]
+mod xembed_tray_protocol;
 
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::error::Error;
@@ -144,7 +155,8 @@ use std::path::Path;
 #[cfg(feature = "flutter")]
 use std::path::PathBuf;
 #[cfg(feature = "flutter")]
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use calloop::signals::{Signal, Signals};
@@ -248,9 +260,9 @@ use options::{Options, RuntimeLimit, SIMULATED_HOTPLUG_GAP_FRAMES};
 #[cfg(feature = "flutter")]
 use output_control::{
     ControlEvent, OutputConfirmationAction, OutputControlFailure, OutputControlServer,
-    PendingOutputApply, PendingOutputConfirmation, PendingSettingsControl, PendingSystemControl,
-    PendingSystemControlWait, PendingUiDevelopment, SettingsControlCommand, ShellControlCommand,
-    SystemControlCommand, SystemControlWaitKind,
+    PendingOutputApply, PendingOutputConfirmation, PendingSettingsControl, PendingSoftwareDimming,
+    PendingSystemControl, PendingSystemControlWait, PendingUiDevelopment, SettingsControlCommand,
+    ShellControlCommand, SystemControlCommand, SystemControlWaitKind,
 };
 use output_topology::{
     ConnectedConnector, RuntimeOutputConfiguration, configured_outputs, connected_outputs,

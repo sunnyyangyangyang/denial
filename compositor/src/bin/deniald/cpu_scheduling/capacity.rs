@@ -125,17 +125,22 @@ mod tests {
         // Its reset-on-fork flag and hint disappear when the worker exits.
         std::thread::spawn(|| {
             let parameters = scheduler_parameters(0);
-            assert_eq!(
-                unsafe {
-                    libc::syscall(
-                        libc::SYS_sched_setscheduler,
-                        0,
-                        libc::SCHED_OTHER | libc::SCHED_RESET_ON_FORK,
-                        &parameters,
-                    )
-                },
-                0
-            );
+            let result = unsafe {
+                libc::syscall(
+                    libc::SYS_sched_setscheduler,
+                    0,
+                    libc::SCHED_OTHER | libc::SCHED_RESET_ON_FORK,
+                    &parameters,
+                )
+            };
+            if result != 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::PermissionDenied {
+                    // Nix's build sandbox blocks scheduling-policy syscalls.
+                    return;
+                }
+                panic!("could not install the test scheduling policy: {error}");
+            }
             let before = attributes();
             request_minimum(512).expect("kernel must support the tested utilization-clamp API");
             let after = attributes();

@@ -8,11 +8,17 @@ import '../shell_settings.dart';
 import 'settings_controls.dart';
 import 'system_bar_placement_card.dart';
 
+const Key settingsScrollingLayoutWheelSpeedSliderKey = Key(
+  'settings-scrolling-layout-wheel-speed-slider',
+);
+
 class SettingsLayoutPage extends StatelessWidget {
   const SettingsLayoutPage({
     required this.settings,
     required this.displayLayout,
     required this.onWindowLayoutChanged,
+    required this.onScrollingLayoutWheelSpeedChanged,
+    required this.onScrollingLayoutWheelUpDirectionChanged,
     required this.onWorkspacesEnabledChanged,
     required this.onWorkspaceCountChanged,
     required this.onWorkspaceSwitchingOrientationChanged,
@@ -29,6 +35,9 @@ class SettingsLayoutPage extends StatelessWidget {
   final ShellLayoutSettings settings;
   final DisplayLayout? displayLayout;
   final ValueChanged<DesktopWindowLayout> onWindowLayoutChanged;
+  final ValueChanged<double> onScrollingLayoutWheelSpeedChanged;
+  final ValueChanged<ScrollingLayoutWheelUpDirection>
+  onScrollingLayoutWheelUpDirectionChanged;
   final ValueChanged<bool> onWorkspacesEnabledChanged;
   final ValueChanged<double> onWorkspaceCountChanged;
   final ValueChanged<WorkspaceSwitchingOrientation>
@@ -88,6 +97,57 @@ class SettingsLayoutPage extends StatelessWidget {
                 ],
               ),
             ),
+            if (settings.windowLayout == DesktopWindowLayout.scrolling)
+              SettingsSection(
+                title: l10n.settingsScrollingLayoutWheelTitle,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      l10n.settingsScrollingLayoutWheelDescription,
+                      style: ShellText.base.copyWith(
+                        color: ShellTheme.colorsOf(context).textSecondary,
+                        fontSize: 11,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    SettingsSlider(
+                      key: settingsScrollingLayoutWheelSpeedSliderKey,
+                      label: l10n.settingsScrollingLayoutWheelSpeed,
+                      value: settings.scrollingLayoutWheelSpeed,
+                      minimum: scrollingLayoutWheelSpeedMinimum,
+                      maximum: scrollingLayoutWheelSpeedMaximum,
+                      divisions: 15,
+                      valueLabel:
+                          '${settings.scrollingLayoutWheelSpeed.toStringAsFixed(2)}×',
+                      onChanged: onScrollingLayoutWheelSpeedChanged,
+                    ),
+                    const SizedBox(height: 18),
+                    Text(
+                      l10n.settingsScrollingLayoutWheelUpDirection,
+                      style: ShellText.cardTitle.copyWith(
+                        color: ShellTheme.colorsOf(context).textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SettingsSegmentedControl<ScrollingLayoutWheelUpDirection>(
+                      value: settings.scrollingLayoutWheelUpDirection,
+                      choices: [
+                        SettingsChoice(
+                          ScrollingLayoutWheelUpDirection.left,
+                          l10n.settingsScrollingLayoutWheelUpLeft,
+                        ),
+                        SettingsChoice(
+                          ScrollingLayoutWheelUpDirection.right,
+                          l10n.settingsScrollingLayoutWheelUpRight,
+                        ),
+                      ],
+                      onChanged: onScrollingLayoutWheelUpDirectionChanged,
+                    ),
+                  ],
+                ),
+              ),
           ],
         ),
         SettingsCardGroup(

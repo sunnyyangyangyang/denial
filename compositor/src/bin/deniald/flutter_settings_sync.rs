@@ -95,6 +95,7 @@ pub(super) fn synchronize_settings(
     runtime: &mut flutter_runtime::FlutterRuntime,
     events: &mut RuntimeState,
 ) -> Result<(), Box<dyn Error>> {
+    synchronize_external_settings(events);
     if let Some(accent) = runtime.take_theme_accent() {
         events.resolved_theme_accent = DesktopAccentColor::from_srgb24(accent);
     }
@@ -578,6 +579,147 @@ pub(super) fn synchronize_settings(
     publish_settings_document(events)?;
     synchronize_committed_theme(runtime, events)?;
     Ok(())
+}
+
+#[cfg(feature = "flutter")]
+fn synchronize_external_settings(events: &mut RuntimeState) {
+    if !std::mem::take(&mut events.settings_external_change_pending) {
+        return;
+    }
+    let prepared = match events
+        .wayland
+        .as_ref()
+        .map(|frontend| frontend.settings.prepare_external_reload())
+    {
+        None | Some(Ok(None)) => return,
+        Some(Err(error)) => {
+            warn!(%error, "rejected externally edited Denial settings");
+            return;
+        }
+        Some(Ok(Some(prepared))) => prepared,
+    };
+
+    let (
+        previous_keyboard,
+        previous_mouse,
+        previous_touchpad,
+        previous_cursor_policy,
+        previous_cursor_size,
+    ) = {
+        let frontend = events.wayland.as_ref().expect("missing Wayland frontend");
+        (
+            frontend.settings.keyboard().clone(),
+            frontend.settings.mouse().clone(),
+            frontend.settings.touchpad().clone(),
+            frontend.settings.allow_client_cursor_surfaces(),
+            frontend.settings.cursor_size(),
+        )
+    };
+    let next_keyboard = prepared.keyboard().clone();
+    let next_mouse = prepared.mouse().clone();
+    let next_touchpad = prepared.touchpad().clone();
+    let keyboard_changed = next_keyboard != previous_keyboard;
+    let mouse_changed = next_mouse != previous_mouse;
+    let touchpad_changed = next_touchpad != previous_touchpad;
+    let mut keyboard_attempted = false;
+    let mut touchpad_attempted = false;
+    let mut mouse_attempted = false;
+
+    let apply = (|| -> Result<(), String> {
+        if keyboard_changed {
+            keyboard_attempted = true;
+            wayland_frontend::install_keyboard_settings(events, &next_keyboard)
+                .map_err(|error| error.to_string())?;
+        }
+        if touchpad_changed {
+            touchpad_attempted = true;
+            wayland_frontend::install_touchpad_settings(events, &next_touchpad)?;
+        }
+        if mouse_changed {
+            mouse_attempted = true;
+            wayland_frontend::install_mouse_settings(events, &next_mouse)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = apply {
+        rollback_external_native_settings(
+            events,
+            &previous_keyboard,
+            &previous_touchpad,
+            &previous_mouse,
+            keyboard_attempted,
+            touchpad_attempted,
+            mouse_attempted,
+        );
+        warn!(%error, "could not apply externally edited Denial settings");
+        return;
+    }
+
+    let commit = events
+        .wayland
+        .as_mut()
+        .expect("missing Wayland frontend")
+        .settings
+        .commit(prepared);
+    if let Err(error) = commit {
+        rollback_external_native_settings(
+            events,
+            &previous_keyboard,
+            &previous_touchpad,
+            &previous_mouse,
+            keyboard_attempted,
+            touchpad_attempted,
+            mouse_attempted,
+        );
+        warn!(%error, "externally edited Denial settings changed again before commit");
+        // The racing edit has its own inotify event, but explicitly retain a
+        // retry in case the events were coalesced into the dispatch we drained.
+        events.settings_external_change_pending = true;
+        return;
+    }
+
+    let frontend = events.wayland.as_mut().expect("missing Wayland frontend");
+    if previous_cursor_policy != frontend.settings.allow_client_cursor_surfaces() {
+        frontend.queue_cursor_policy_update();
+    }
+    if previous_cursor_size != frontend.settings.cursor_size()
+        && let Err(error) = frontend.publish_xwayland_settings()
+    {
+        warn!(%error, "could not update Xwayland cursor settings");
+    }
+    // Even unchanged native sections carry the shared document revision.
+    frontend.keyboard_configuration_changed = true;
+    events.input_device_capabilities_changed = true;
+    info!(
+        revision = frontend.settings.revision(),
+        path = %frontend.settings.path().display(),
+        "applied externally edited Denial settings"
+    );
+}
+
+#[cfg(feature = "flutter")]
+fn rollback_external_native_settings(
+    events: &mut RuntimeState,
+    keyboard: &settings::KeyboardSettings,
+    touchpad: &settings::TouchpadSettings,
+    mouse: &settings::MouseSettings,
+    keyboard_attempted: bool,
+    touchpad_attempted: bool,
+    mouse_attempted: bool,
+) {
+    if mouse_attempted && let Err(error) = wayland_frontend::install_mouse_settings(events, mouse) {
+        warn!(%error, "could not roll back mouse settings after external edit failure");
+    }
+    if touchpad_attempted
+        && let Err(error) = wayland_frontend::install_touchpad_settings(events, touchpad)
+    {
+        warn!(%error, "could not roll back touchpad settings after external edit failure");
+    }
+    if keyboard_attempted
+        && let Err(error) = wayland_frontend::install_keyboard_settings(events, keyboard)
+    {
+        warn!(%error, "could not roll back keyboard settings after external edit failure");
+    }
 }
 
 #[cfg(feature = "flutter")]
@@ -1360,6 +1502,9 @@ pub(super) fn apply_resident_output_geometry(
     }
     events.output_control_dirty = true;
     *topology = staged_topology;
+    if let Some(frontend) = events.wayland.as_mut() {
+        frontend.set_scrolling_layout_axes(&staged_configuration.scrolling_layout_axes);
+    }
     *configuration = staged_configuration;
     info!(
         outputs = scanouts.len(),

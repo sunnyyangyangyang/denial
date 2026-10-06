@@ -48,6 +48,12 @@ fn shell_document(value: Value) -> String {
         .entry("windowLayout")
         .or_insert_with(|| Value::String("stacking".to_owned()));
     layout
+        .entry("scrollingLayoutWheelSpeed")
+        .or_insert(Value::from(DEFAULT_SCROLLING_LAYOUT_WHEEL_SPEED));
+    layout
+        .entry("scrollingLayoutWheelUpDirection")
+        .or_insert_with(|| Value::String("left".to_owned()));
+    layout
         .entry("workspacesEnabled")
         .or_insert(Value::Bool(false));
     layout
@@ -82,6 +88,14 @@ fn migrates_existing_shell_document_without_losing_sections() {
     assert_eq!(document["appearance"]["allowClientCursorSurfaces"], true);
     assert_eq!(document["appearance"]["cursorSize"], DEFAULT_CURSOR_SIZE);
     assert_eq!(document["layout"]["windowLayout"], "stacking");
+    assert_eq!(
+        document["layout"]["scrollingLayoutWheelSpeed"],
+        DEFAULT_SCROLLING_LAYOUT_WHEEL_SPEED
+    );
+    assert_eq!(
+        document["layout"]["scrollingLayoutWheelUpDirection"],
+        "left"
+    );
     assert_eq!(document["layout"]["workspacesEnabled"], false);
     assert_eq!(document["layout"]["workspaceCount"], 4);
     assert_eq!(
@@ -266,6 +280,57 @@ fn window_layout_is_validated_and_persisted() {
 }
 
 #[test]
+fn scrolling_layout_wheel_settings_are_validated_and_persisted() {
+    let temporary = TemporaryDirectory::new("settings-scrolling-layout-wheel");
+    let path = temporary.settings_path();
+    let mut manager = SettingsManager::load_path(path.clone()).unwrap();
+    let update = manager
+        .prepare_shell_update(
+            manager.revision(),
+            &shell_document(serde_json::json!({
+                "appearance": {"colorSchemePreference": "preferDark"},
+                "layout": {
+                    "scrollingLayoutWheelSpeed": 2.25,
+                    "scrollingLayoutWheelUpDirection": "right"
+                }
+            })),
+        )
+        .unwrap();
+    manager.commit(update).unwrap();
+
+    let configured = ScrollingLayoutWheelSettings {
+        speed: 2.25,
+        up_direction: ScrollingLayoutWheelUpDirection::Right,
+    };
+    assert_eq!(manager.scrolling_layout_wheel_settings(), configured);
+    assert_eq!(
+        SettingsManager::load_path(path)
+            .unwrap()
+            .scrolling_layout_wheel_settings(),
+        configured
+    );
+
+    for speed in [0.249, 4.001] {
+        let document = shell_document(serde_json::json!({
+            "appearance": {"colorSchemePreference": "preferDark"},
+            "layout": {"scrollingLayoutWheelSpeed": speed}
+        }));
+        assert!(matches!(
+            manager.prepare_shell_update(manager.revision(), &document),
+            Err(SettingsError::Document(_))
+        ));
+    }
+    let invalid_direction = shell_document(serde_json::json!({
+        "appearance": {"colorSchemePreference": "preferDark"},
+        "layout": {"scrollingLayoutWheelUpDirection": "up"}
+    }));
+    assert!(matches!(
+        manager.prepare_shell_update(manager.revision(), &invalid_direction),
+        Err(SettingsError::Document(_))
+    ));
+}
+
+#[test]
 fn touchpad_update_is_persistent_and_revisioned() {
     let temporary = TemporaryDirectory::new("settings-touchpad-update");
     let path = temporary.settings_path();
@@ -372,6 +437,108 @@ fn rejects_external_edits_before_commit() {
 }
 
 #[test]
+fn reloads_external_edit_with_an_authoritative_revision() {
+    let temporary = TemporaryDirectory::new("settings-external-reload");
+    let path = temporary.settings_path();
+    let mut manager = SettingsManager::load_path(path.clone()).unwrap();
+    let old_revision = manager.revision();
+    let external_edit = shell_document(serde_json::json!({
+        "revision": 9000,
+        "appearance": {
+            "colorSchemePreference": "preferLight",
+            "cursorSize": 48
+        },
+        "externalEditorMarker": true
+    }));
+    fs::write(&path, format!("{external_edit}\n")).unwrap();
+
+    let prepared = manager
+        .prepare_external_reload()
+        .unwrap()
+        .expect("external bytes should produce a transaction");
+    manager.commit(prepared).unwrap();
+
+    assert_eq!(manager.revision(), old_revision + 1);
+    assert_eq!(manager.cursor_size(), 48);
+    let document: Value = serde_json::from_str(&manager.document_json().unwrap()).unwrap();
+    assert_eq!(document["revision"], old_revision + 1);
+    assert_eq!(
+        document["appearance"]["colorSchemePreference"],
+        "preferLight"
+    );
+    assert_eq!(document["externalEditorMarker"], true);
+    assert!(manager.prepare_external_reload().unwrap().is_none());
+
+    let update = manager
+        .prepare_mouse_update(manager.revision(), MouseSettings { speed: 0.25 })
+        .unwrap();
+    manager.commit(update).unwrap();
+}
+
+#[test]
+fn external_removal_restores_and_recreates_defaults() {
+    let temporary = TemporaryDirectory::new("settings-external-removal");
+    let path = temporary.settings_path();
+    let mut manager = SettingsManager::load_path(path.clone()).unwrap();
+    let update = manager
+        .prepare_mouse_update(manager.revision(), MouseSettings { speed: 0.75 })
+        .unwrap();
+    manager.commit(update).unwrap();
+    let old_revision = manager.revision();
+    fs::remove_file(&path).unwrap();
+
+    let prepared = manager
+        .prepare_external_reload()
+        .unwrap()
+        .expect("removal should produce a default-settings transaction");
+    manager.commit(prepared).unwrap();
+
+    assert_eq!(manager.revision(), old_revision + 1);
+    assert_eq!(manager.mouse(), &MouseSettings::default());
+    assert!(path.is_file());
+}
+
+#[test]
+fn invalid_external_edit_stays_on_disk_without_changing_live_state() {
+    let temporary = TemporaryDirectory::new("settings-invalid-external-reload");
+    let path = temporary.settings_path();
+    let manager = SettingsManager::load_path(path.clone()).unwrap();
+    let old_revision = manager.revision();
+    fs::write(&path, b"{ invalid json\n").unwrap();
+
+    assert!(matches!(
+        manager.prepare_external_reload(),
+        Err(SettingsError::Json(_))
+    ));
+    assert_eq!(manager.revision(), old_revision);
+    assert_eq!(fs::read(&path).unwrap(), b"{ invalid json\n");
+}
+
+#[test]
+fn rejects_a_second_external_edit_during_reload() {
+    let temporary = TemporaryDirectory::new("settings-external-reload-race");
+    let path = temporary.settings_path();
+    let mut manager = SettingsManager::load_path(path.clone()).unwrap();
+    let first = shell_document(serde_json::json!({
+        "appearance": {"colorSchemePreference": "preferLight"}
+    }));
+    fs::write(&path, format!("{first}\n")).unwrap();
+    let prepared = manager
+        .prepare_external_reload()
+        .unwrap()
+        .expect("first external edit should prepare");
+    let second = shell_document(serde_json::json!({
+        "appearance": {"colorSchemePreference": "noPreference"}
+    }));
+    fs::write(&path, format!("{second}\n")).unwrap();
+
+    assert!(matches!(
+        manager.commit(prepared),
+        Err(SettingsError::Conflict)
+    ));
+}
+
+#[test]
 fn rejects_symlink_target() {
     let temporary = TemporaryDirectory::new("settings-symlink");
     let path = temporary.settings_path();
@@ -451,4 +618,28 @@ fn validates_application_environment_before_writing() {
             Err(SettingsError::Document(_))
         ));
     }
+}
+
+#[test]
+fn gtk_input_method_policy_is_split_by_display_backend() {
+    fn environment(value: serde_json::Value) -> ApplicationEnvironment {
+        let document = serde_json::json!({"applicationEnvironment": value});
+        ApplicationEnvironment::from_document(document.as_object().unwrap()).unwrap()
+    }
+
+    assert_eq!(GTK_INPUT_METHOD_BACKEND_FALLBACK, "wayland:xim");
+    assert_eq!(x11_gtk_input_method_backend_fallback(), "xim");
+
+    let configured = environment(serde_json::json!({
+        "default": {"XMODIFIERS": "@im=fcitx"},
+        "applications": {}
+    }));
+    let mut command = Command::new("true");
+    configured.apply(&mut command, None, None);
+    let child_environment = command.get_envs().collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        child_environment.get(OsStr::new("XMODIFIERS")),
+        Some(&Some(OsStr::new("@im=fcitx")))
+    );
+    assert!(!child_environment.contains_key(OsStr::new("GTK_IM_MODULE")));
 }

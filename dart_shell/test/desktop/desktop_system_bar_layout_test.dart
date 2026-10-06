@@ -1,5 +1,4 @@
-import 'dart:ui' show BlendMode;
-
+import 'package:denial_dart_shell/src/desktop/desktop_shell.dart';
 import 'package:denial_dart_shell/src/desktop/desktop_system_bar.dart';
 import 'package:denial_dart_shell/src/localization/denial_localizations.dart';
 import 'package:denial_dart_shell/src/models/battery_status.dart';
@@ -18,6 +17,50 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('overview barrier leaves system-bar controls clickable', (
+    tester,
+  ) async {
+    var barrierTaps = 0;
+    var controlTaps = 0;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 300,
+            height: 200,
+            child: DesktopOverviewInputLayer(
+              active: true,
+              onBarrierTap: (_) => barrierTaps += 1,
+              foregroundControls: <Widget>[
+                Positioned(
+                  left: 20,
+                  top: 12,
+                  width: 80,
+                  height: 32,
+                  child: GestureDetector(
+                    key: const ValueKey<String>('system-bar-control'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => controlTaps += 1,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tapAt(const Offset(40, 28));
+    expect(controlTaps, 1);
+    expect(barrierTaps, 0);
+
+    await tester.tapAt(const Offset(200, 150));
+    expect(controlTaps, 1);
+    expect(barrierTaps, 1);
+  });
+
   testWidgets('horizontal workspace indicator does not fill the bar width', (
     tester,
   ) async {

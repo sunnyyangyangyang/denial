@@ -1,50 +1,46 @@
 import 'package:denial_dart_shell/src/desktop/desktop_workspace.dart';
-import 'package:denial_dart_shell/src/settings/shell_settings.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   const output = Rect.fromLTWH(0, 0, 1920, 1080);
 
-  test('scrolling tiles are clipped to their output', () {
+  test('a stationary window is clipped to its output', () {
     expect(
-      desktopScrollingOutputClip(
-        windowLayout: DesktopWindowLayout.scrolling,
-        pinned: false,
-        transformed: false,
+      desktopOutputClip(
+        activelyDragging: false,
         outputRect: output,
       ),
       output,
     );
   });
 
-  test('pinned scrolling windows remain floating and unclipped', () {
+  test('overview and pinned presentation cannot bypass the output clip', () {
+    // Presentation state is deliberately absent from the clip API. Overview
+    // transforms and pinned stacking must use the same owning-output cut.
     expect(
-      desktopScrollingOutputClip(
-        windowLayout: DesktopWindowLayout.scrolling,
-        pinned: true,
-        transformed: false,
+      desktopOutputClip(
+        activelyDragging: false,
         outputRect: output,
+      ),
+      output,
+    );
+  });
+
+  test('missing output geometry does not create a clip', () {
+    expect(
+      desktopOutputClip(
+        activelyDragging: false,
+        outputRect: null,
       ),
       isNull,
     );
   });
 
-  test('transformed and non-scrolling windows remain unclipped', () {
+  test('an actively dragged window can cross output boundaries', () {
     expect(
-      desktopScrollingOutputClip(
-        windowLayout: DesktopWindowLayout.scrolling,
-        pinned: false,
-        transformed: true,
-        outputRect: output,
-      ),
-      isNull,
-    );
-    expect(
-      desktopScrollingOutputClip(
-        windowLayout: DesktopWindowLayout.dwindle,
-        pinned: false,
-        transformed: false,
+      desktopOutputClip(
+        activelyDragging: true,
         outputRect: output,
       ),
       isNull,

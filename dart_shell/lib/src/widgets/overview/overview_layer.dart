@@ -7,7 +7,7 @@ import 'package:flutter/gestures.dart' show Drag;
 import '../../models/denial_window.dart';
 import '../../theme/motion.dart';
 import '../../theme/shell_theme.dart';
-import '../window_hero.dart';
+import '../window_surface.dart';
 import '../retained_window_motion.dart';
 import '../retained_translation.dart';
 import 'overview_carousel.dart';

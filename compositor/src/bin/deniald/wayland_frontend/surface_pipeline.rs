@@ -1,5 +1,7 @@
 //! Surface commit ingestion, snapshot publication, and Flutter scene projection.
 
+#[cfg(feature = "flutter")]
+use super::managed_window::ManagedWindow;
 use super::*;
 #[cfg(feature = "flutter")]
 use std::sync::Mutex;
@@ -15,6 +17,32 @@ const fn layer_shell_content_kind(layer: WlrLayer) -> WindowContentKind {
         WlrLayer::Bottom => WindowContentKind::LayerShellBottom,
         WlrLayer::Top => WindowContentKind::LayerShellTop,
         WlrLayer::Overlay => WindowContentKind::LayerShellOverlay,
+    }
+}
+
+#[cfg(feature = "flutter")]
+const fn client_surface_content_kind(x11_override_redirect: bool) -> WindowContentKind {
+    if x11_override_redirect {
+        WindowContentKind::PopupSurface
+    } else {
+        WindowContentKind::SurfaceTree
+    }
+}
+
+#[cfg(all(test, feature = "flutter"))]
+mod client_surface_content_kind_tests {
+    use super::*;
+
+    #[test]
+    fn x11_override_redirect_normalizes_to_popup_surface() {
+        assert_eq!(
+            client_surface_content_kind(true),
+            WindowContentKind::PopupSurface
+        );
+        assert_eq!(
+            client_surface_content_kind(false),
+            WindowContentKind::SurfaceTree
+        );
     }
 }
 
@@ -116,13 +144,7 @@ impl WaylandFrontend {
     }
 
     pub(super) fn client_preferred_scale(surface: &WlSurface, output_scale: f64) -> f64 {
-        let client_scale = surface
-            .client()
-            .and_then(|client| {
-                client
-                    .get_data::<XWaylandClientData>()
-                    .map(|data| data.compositor_state.client_scale())
-            })
+        let client_scale = xwayland::surface_client_scale(surface)
             .unwrap_or(1.0)
             .max(f64::EPSILON);
         (output_scale / client_scale).max(1.0)
@@ -665,11 +687,7 @@ impl WaylandFrontend {
                 return None;
             };
             let expects_sample = self.scene_layer_surface_roots.contains(&window_id)
-                || window_expects_sample(
-                    self.input_visibility_known,
-                    &self.visible_window_ids,
-                    window_id,
-                );
+                || self.window_expects_sample(window_id);
             let Some(frame) = self.external_texture_frame(surface_id, expects_sample) else {
                 self.scene_textures_scratch = textures;
                 return None;
@@ -808,16 +826,17 @@ impl WaylandFrontend {
             let Some(surface) = self.window_root_surface(window) else {
                 continue;
             };
+            let Some(managed_window) = ManagedWindow::new(window) else {
+                continue;
+            };
+            let protocol_facts = managed_window.facts();
             let Some(stable_id) = self.surface_id(&surface) else {
-                let x11 = window.x11_surface();
                 warn!(
                     surface = ?surface.id(),
                     surface_alive = surface.is_alive(),
-                    backend = if x11.is_some() { "x11" } else { "wayland" },
-                    x11_window = ?x11.as_ref().map(|surface| surface.window_id()),
-                    x11_override_redirect = ?x11
-                        .as_ref()
-                        .map(|surface| surface.is_override_redirect()),
+                    backend = if protocol_facts.x11 { "x11" } else { "wayland" },
+                    x11_window = ?protocol_facts.protocol_window_id,
+                    x11_override_redirect = protocol_facts.override_redirect,
                     "omitting desktop window without a stable surface identifier"
                 );
                 // TODO: Make surface destruction and desktop-window eviction
@@ -848,27 +867,7 @@ impl WaylandFrontend {
             title.clear();
             app_id.clear();
             layers.clear();
-            let x11 = window.x11_surface();
-            if window.toplevel().is_some() {
-                with_states(&surface, |states| {
-                    let Some(attributes) = states.data_map.get::<XdgToplevelSurfaceData>() else {
-                        return;
-                    };
-                    let attributes = attributes
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    if let Some(value) = &attributes.title {
-                        title.push_str(value);
-                    }
-                    if let Some(value) = &attributes.app_id {
-                        app_id.push_str(value);
-                    }
-                });
-            } else if let Some(x11) = x11.as_ref() {
-                // Smithay exposes these X11 properties as owned strings.
-                title = x11.title();
-                app_id = x11.class();
-            }
+            managed_window.write_metadata(&mut title, &mut app_id);
             let mut composition_order = 0;
             // Flutter does not sample a texture after its window leaves the
             // visible scene (for example, once a minimize animation reaches
@@ -876,11 +875,7 @@ impl WaylandFrontend {
             // sample so restore begins with the client's latest generation.
             // Until Dart publishes its first visibility snapshot, preserve
             // the conservative sampled-texture lifetime contract.
-            let expects_sample = window_expects_sample(
-                self.input_visibility_known,
-                &self.visible_window_ids,
-                stable_id,
-            );
+            let expects_sample = self.window_expects_sample(stable_id);
             self.append_surface_tree(
                 &surface,
                 (0, 0).into(),
@@ -977,13 +972,15 @@ impl WaylandFrontend {
             } else {
                 fallback_height
             };
-            let minimized = self.minimized_windows.contains(&surface.id());
+            let minimized = self.surface_is_minimized(&surface.id());
+            let transient_parent_id = self.transient_parent_stable_id(&window);
             if !minimized
-                && self.workspace_location(stable_id).is_none()
-                && let Some(parent_id) = self.transient_parent_stable_id(&window)
+                && let Some(parent_id) = transient_parent_id
                 && let Some(parent_location) = self.workspace_location(parent_id)
             {
-                self.window_workspaces.insert(stable_id, parent_location);
+                self.window_registry
+                    .ensure(WindowId::new(stable_id))
+                    .workspace = Some(parent_location);
             }
             // A managed leaf's layout space owns output and workspace as one
             // value. In particular, a scrolling column may intentionally be
@@ -1005,13 +1002,9 @@ impl WaylandFrontend {
                 .and_then(|output| i64::try_from(output.0).ok())
                 .unwrap_or(-1);
             let presentation = self.managed_window_presentation(window);
-            let suppress_animations = x11
-                .as_ref()
-                .is_some_and(|_| !presentation.server_side_decorated);
+            let suppress_animations = protocol_facts.x11 && !presentation.server_side_decorated;
             let server_side_decorated = presentation.server_side_decorated;
-            let window_opacity = x11
-                .as_ref()
-                .map_or(1.0, |x11| xwayland::x11_window_opacity(x11));
+            let window_opacity = protocol_facts.opacity;
             if window_opacity < 1.0 {
                 for layer in &mut layers {
                     layer.opacity *= window_opacity;
@@ -1081,6 +1074,7 @@ impl WaylandFrontend {
                 geometry_height: f64::from(geometry.size.h),
                 monitor_id,
                 workspace_id,
+                transient_parent_id: transient_parent_id.unwrap_or(0),
                 minimized,
                 fullscreen: presentation.fullscreen,
                 maximized: presentation.maximized,
@@ -1099,7 +1093,7 @@ impl WaylandFrontend {
                     opacity * window_opacity
                 },
                 surfaces: layers,
-                content_kind: WindowContentKind::SurfaceTree,
+                content_kind: client_surface_content_kind(protocol_facts.override_redirect),
                 opacity_class,
             };
             if let Some(previous) = windows.get_mut(window_count) {
@@ -1143,7 +1137,7 @@ impl WaylandFrontend {
                 .output_for_geometry(global_geometry)
                 .and_then(|entry| i64::try_from(entry.id.0).ok())
                 .unwrap_or(-1);
-            let minimized = self.minimized_local_windows.contains(&local_window.id);
+            let minimized = self.window_is_minimized(local_window.id);
             let output_id = self
                 .output_for_geometry(global_geometry)
                 .map(|entry| entry.id);
@@ -1190,10 +1184,11 @@ impl WaylandFrontend {
                 geometry_height: local_window.geometry.height,
                 monitor_id,
                 workspace_id,
+                transient_parent_id: 0,
                 minimized,
                 fullscreen: false,
                 maximized: false,
-                pinned: self.pinned_windows.contains(&local_window.id),
+                pinned: self.window_id_is_pinned(local_window.id),
                 transform: 0,
                 scale_120: 120,
                 content_x: 0.0,
@@ -1372,6 +1367,7 @@ impl WaylandFrontend {
                     geometry_height: f64::from(layer_geometry.size.h),
                     monitor_id: i64::try_from(output.id.0).unwrap_or(-1),
                     workspace_id: -1,
+                    transient_parent_id: 0,
                     minimized: false,
                     fullscreen: false,
                     maximized: false,
@@ -1418,11 +1414,7 @@ impl WaylandFrontend {
                 app_id.clear();
                 app_id.push_str("denia-systemui-input-method");
                 layers.clear();
-                let expects_sample = window_expects_sample(
-                    self.input_visibility_known,
-                    &self.visible_window_ids,
-                    stable_id,
-                );
+                let expects_sample = self.window_expects_sample(stable_id);
                 let mut composition_order = 0;
                 self.append_surface_tree(
                     surface,
@@ -1519,6 +1511,7 @@ impl WaylandFrontend {
                     geometry_height: f64::from(geometry.size.h),
                     monitor_id,
                     workspace_id: 1,
+                    transient_parent_id: 0,
                     minimized: false,
                     fullscreen: false,
                     maximized: false,
@@ -1533,7 +1526,7 @@ impl WaylandFrontend {
                     server_side_decorated: false,
                     opacity: 1.0,
                     surfaces: layers,
-                    content_kind: WindowContentKind::SurfaceTree,
+                    content_kind: WindowContentKind::PopupSurface,
                     opacity_class: WindowOpacityClass::ContentTranslucent,
                 };
                 if let Some(previous) = windows.get_mut(window_count) {
@@ -1582,18 +1575,18 @@ impl WaylandFrontend {
         let routing_changed = input_routing_changed(self.input_layout.as_ref(), &layout);
         let visibility_changed = input_visibility_changed(self.input_layout.as_ref(), &layout);
         if visibility_changed {
-            let mut visible_window_ids = std::mem::take(&mut self.visible_window_ids);
-            visible_window_ids.clear();
+            self.clear_visible_windows();
             for surface_id in &layout.visible_surface_ids {
                 let Some(surface) = self.surfaces_by_id.get(surface_id) else {
                     continue;
                 };
                 let root = self.toplevel_candidate_surface(surface);
                 if let Some(window_id) = self.input_root_ids.get(&root.id()).copied() {
-                    visible_window_ids.insert(window_id);
+                    self.window_registry
+                        .ensure(WindowId::new(window_id))
+                        .visible = true;
                 }
             }
-            self.visible_window_ids = visible_window_ids;
             self.invalidate_idle_inhibition();
         }
         self.input_visibility_known = true;

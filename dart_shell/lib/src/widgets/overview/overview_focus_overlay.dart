@@ -2,7 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../../models/denial_window.dart';
 import '../../theme/shell_theme.dart';
-import '../window_hero.dart';
+import '../window_surface.dart';
 import '../retained_window_motion.dart';
 import '../../theme/motion.dart';
 

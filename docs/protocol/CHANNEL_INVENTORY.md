@@ -45,14 +45,6 @@ A trusted fingerprint rejection in the current lock epoch requests two 35 ms
 pulses at 70%, separated by 60 ms. The bounded worker drops stale feedback;
 missing hardware or a stopped service never blocks input or authentication.
 
-## Dormant diagnostic hooks
-
-The Dart shell still contains hooks for
-`denial/imported_frame_timing_control` and `denial/imported_frame_timing`.
-The current native compositor neither handles the control message nor
-publishes timing packets, so these names are not part of the active protocol
-contract.
-
 ## System-command packet
 
 The packet is at most 64 KiB and contains at most 64 arguments:

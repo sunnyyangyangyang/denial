@@ -1,5 +1,6 @@
 //! Per-surface opt-out and native mobile client geometry.
 
+use super::managed_window::ManagedWindow;
 use super::*;
 use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, GlobalDispatch, New};
 
@@ -106,9 +107,7 @@ impl WaylandFrontend {
         window: &Window,
     ) -> Option<Rectangle<i32, Logical>> {
         if !self.mobile_shell
-            || window
-                .x11_surface()
-                .is_some_and(|x11| x11.is_override_redirect())
+            || ManagedWindow::new(window).is_some_and(|window| window.facts().override_redirect)
         {
             return None;
         }

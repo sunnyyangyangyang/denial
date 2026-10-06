@@ -13,6 +13,7 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Serial, Size};
+#[cfg(feature = "xwayland")]
 use smithay::xwayland::xwm::ResizeEdge as X11ResizeEdge;
 
 use super::RuntimeState;
@@ -364,9 +365,9 @@ impl PointerGrab<RuntimeState> for MoveSurfaceGrab {
 /// Compositor-owned SUPER+drag for managed layouts.
 ///
 /// The layout leaf remains authoritative while Flutter paints the dragged
-/// window at a translated presentation rectangle. On release the layout
-/// resolves the destination, then Flutter animates from that exact rectangle
-/// to the resulting tile without issuing speculative client configures.
+/// window at a translated presentation rectangle. Drop previews keep the
+/// authoritative layout untouched while speculatively configuring affected
+/// clients to the exact sizes planned by a cloned layout.
 #[cfg(feature = "flutter")]
 pub(super) struct TileMoveGrab {
     start_data: GrabStartData<RuntimeState>,
@@ -424,6 +425,10 @@ impl TileMoveGrab {
                 .as_ref()
                 .expect("missing Wayland frontend")
                 .window_geometry_target(window);
+            data.wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .finish_window_layout_preview(window);
             super::wayland_frontend::queue_transient_window_placement(
                 data,
                 window,
@@ -434,6 +439,10 @@ impl TileMoveGrab {
         }
         for (window, geometry) in planned {
             let continuing = previous.iter().any(|candidate| candidate == &window);
+            data.wayland
+                .as_mut()
+                .expect("missing Wayland frontend")
+                .update_window_layout_preview(&window, geometry.size);
             super::wayland_frontend::queue_transient_window_placement(
                 data,
                 &window,
@@ -459,6 +468,10 @@ impl TileMoveGrab {
                     .as_ref()
                     .expect("missing Wayland frontend")
                     .window_geometry_target(&window);
+                data.wayland
+                    .as_mut()
+                    .expect("missing Wayland frontend")
+                    .finish_window_layout_preview(&window);
                 super::wayland_frontend::queue_transient_window_placement(
                     data,
                     &window,
@@ -737,6 +750,7 @@ impl ResizeEdges {
         Some(edges)
     }
 
+    #[cfg(feature = "xwayland")]
     pub(super) const fn from_x11(edge: X11ResizeEdge) -> Self {
         match edge {
             X11ResizeEdge::Top => Self::new(true, false, false, false),

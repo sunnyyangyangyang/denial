@@ -1,5 +1,6 @@
 import 'package:denial_dart_shell/src/desktop/desktop_workspace.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -46,6 +47,24 @@ void main() {
     expect(
       state.isPlacementOnActiveWorkspace(first.copyWith(workspaceId: 1)),
       isFalse,
+    );
+  });
+
+  test('display layout restores the authoritative active workspace', () {
+    final container = ProviderContainer.test();
+    addTearDown(container.dispose);
+    final controller = container.read(desktopWorkspaceProvider.notifier);
+
+    controller.syncWorkspaceConfiguration(
+      enabled: true,
+      count: 4,
+      monitorIds: const <int>[11, 22],
+      authoritativeActiveWorkspaces: const <int, int>{11: 2, 22: 3},
+    );
+
+    expect(
+      container.read(desktopWorkspaceProvider).activeWorkspaces,
+      const <int, int>{11: 2, 22: 3},
     );
   });
 

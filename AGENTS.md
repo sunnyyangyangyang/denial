@@ -249,10 +249,10 @@ For separate caches, set `DENIAL_PC_DEPENDENCY_ROOT`,
 network access; subsequent builds reuse the cache.
 
 The host needs a Rust toolchain compatible with the repository-level
-`rust-toolchain.toml`,
-`pkg-config`, Xwayland, and the development libraries required by Smithay's
-DRM, GBM/EGL, libinput, libseat and udev backends. Only binding regeneration
-needs Clang/libclang.
+`rust-toolchain.toml`, `pkg-config`, and the development libraries required by
+Smithay's DRM, GBM/EGL, libinput, libseat and udev backends. Normal builds also
+need Xwayland; `DENIAL_PC_XWAYLAND=0` removes that build and runtime
+requirement. Only binding regeneration needs Clang/libclang.
 
 Install or remove the local display-manager entry with:
 

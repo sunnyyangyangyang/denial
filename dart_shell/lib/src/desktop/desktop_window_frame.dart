@@ -212,9 +212,6 @@ class _DesktopWindowFrame extends ConsumerWidget {
         (settings) => settings.layout.workspaceSwitchingOrientation,
       ),
     );
-    final windowLayout = ref.watch(
-      shellSettingsProvider.select((settings) => settings.layout.windowLayout),
-    );
     final followsLivePlacement =
         this.placement.dragging &&
         liveGeometry?.dragging == true &&
@@ -239,10 +236,8 @@ class _DesktopWindowFrame extends ConsumerWidget {
     final outputRect = outputPixelGrid?.logicalRect;
     final transformed =
         overview || switching || desktopWidget || offscreenMinimized;
-    final scrollingOutputClip = desktopScrollingOutputClip(
-      windowLayout: windowLayout,
-      pinned: window.pinned,
-      transformed: transformed,
+    final outputClip = desktopOutputClip(
+      activelyDragging: placement.dragging,
       outputRect: outputRect,
     );
     final frame = desktopPixelAlignedWindowFrame(
@@ -264,8 +259,9 @@ class _DesktopWindowFrame extends ConsumerWidget {
     final minimizeEffectDuration = desktopWidgetEntering
         ? Duration.zero
         : duration;
-    final fullscreenVisual = placement.fullscreen && !transformed;
-    final drawsServerFrame = !fullscreenVisual && placement.serverSideDecorated;
+    final drawsServerFrame = transformed
+        ? placement.serverSideDecorated
+        : placement.drawsLiveServerFrame;
     final theme = ShellTheme.of(context);
     final windowRadius = drawsServerFrame ? theme.windowRadius : 0.0;
     final windowOpacity = active
@@ -304,7 +300,7 @@ class _DesktopWindowFrame extends ConsumerWidget {
       pixelGridScale: devicePixelRatio,
       pixelGridOrigin: pixelGridOrigin,
       alignSizeToDevicePixels: true,
-      globalClipRect: scrollingOutputClip,
+      globalClipRect: outputClip,
       child: DesktopWorkspaceWindowTransition(
         placement: placement,
         transition: workspaceTransition,
@@ -574,6 +570,7 @@ class _DesktopAnimatedWindowPosition extends ConsumerStatefulWidget {
 class _DesktopAnimatedWindowPositionState
     extends ConsumerState<_DesktopAnimatedWindowPosition> {
   late Curve _curve;
+  late final ValueNotifier<bool> _overviewTransitionCompleted;
   bool _overviewTransitionActive = false;
   bool _layoutPreviewExitActive = false;
   Rect? _dragReleaseAnimationOrigin;
@@ -582,11 +579,21 @@ class _DesktopAnimatedWindowPositionState
   void initState() {
     super.initState();
     _curve = widget.overview ? Motion.overviewEnterCurve : Motion.md3Emphasized;
+    _overviewTransitionCompleted = ValueNotifier<bool>(widget.overview);
+  }
+
+  @override
+  void dispose() {
+    _overviewTransitionCompleted.dispose();
+    super.dispose();
   }
 
   @override
   void didUpdateWidget(covariant _DesktopAnimatedWindowPosition oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final layoutPreviewGeometryChanged =
+        widget.rect != oldWidget.rect &&
+        (widget.layoutPreviewing || oldWidget.layoutPreviewing);
     if (oldWidget.dragging && !widget.dragging) {
       final translation = ref
           .read(desktopLiveWindowPlacementsProvider)
@@ -599,22 +606,31 @@ class _DesktopAnimatedWindowPositionState
       _layoutPreviewExitActive = true;
     }
     final interruptedOverviewTransition = _overviewTransitionActive;
+    final overviewGeometryWillAnimate =
+        widget.duration != Duration.zero && widget.rect != oldWidget.rect;
     if (!oldWidget.overview && widget.overview) {
       _curve = interruptedOverviewTransition
           ? Motion.overviewReversalCurve
           : Motion.overviewEnterCurve;
-      _overviewTransitionActive = true;
+      _overviewTransitionActive = overviewGeometryWillAnimate;
+      _overviewTransitionCompleted.value = !_overviewTransitionActive;
     } else if (oldWidget.overview && !widget.overview) {
       _curve = interruptedOverviewTransition
           ? Motion.overviewReversalCurve
           : Motion.overviewExitCurve;
-      _overviewTransitionActive = true;
+      _overviewTransitionActive = overviewGeometryWillAnimate;
+      _overviewTransitionCompleted.value = false;
     } else if (widget.desktopWidget != oldWidget.desktopWidget ||
         widget.offscreenMinimized != oldWidget.offscreenMinimized ||
         widget.switching ||
         oldWidget.switching) {
       _curve = Motion.md3Emphasized;
       _overviewTransitionActive = false;
+      _overviewTransitionCompleted.value = false;
+    } else if (layoutPreviewGeometryChanged) {
+      // Native layout previews include only siblings whose planned rectangle
+      // changed, so the dragged tile and unaffected tiles never bounce.
+      _curve = Motion.layoutTileReflowCurve;
     } else if (!_overviewTransitionActive &&
         !widget.overview &&
         widget.rect != oldWidget.rect) {
@@ -660,7 +676,7 @@ class _DesktopAnimatedWindowPositionState
     final positionDuration = widget.dragging
         ? Duration.zero
         : previewMotionActive && widget.duration != Duration.zero
-        ? Motion.tile
+        ? Motion.layoutTileReflow
         : widget.duration;
     return RetainedAnimatedPositioned(
       duration: positionDuration,
@@ -672,16 +688,26 @@ class _DesktopAnimatedWindowPositionState
       // layer instead of resizing and repainting on every animation tick.
       layoutRect: layoutRect,
       onEnd: () {
+        final completedOverviewEntrance =
+            _overviewTransitionActive && widget.overview;
         _overviewTransitionActive = false;
         _layoutPreviewExitActive = false;
         _dragReleaseAnimationOrigin = null;
+        if (completedOverviewEntrance) {
+          _overviewTransitionCompleted.value = true;
+        }
       },
       globalClipRect: widget.globalClipRect,
-      child: RetainedTranslation(
-        translation: liveTranslation,
-        enabled: widget.dragging,
-        devicePixelRatio: pixelAlignmentInset == null ? null : devicePixelRatio,
-        child: widget.child,
+      child: DesktopOverviewTransitionStatus(
+        completed: _overviewTransitionCompleted,
+        child: RetainedTranslation(
+          translation: liveTranslation,
+          enabled: widget.dragging,
+          devicePixelRatio: pixelAlignmentInset == null
+              ? null
+              : devicePixelRatio,
+          child: widget.child,
+        ),
       ),
     );
   }

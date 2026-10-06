@@ -127,6 +127,8 @@ const AUDIO_STREAMS_STATE_CHANNEL: &CStr = c"denial/audio_streams_state";
 const AUDIO_DEVICES_STATE_CHANNEL: &CStr = c"denial/audio_devices_state";
 const BRIGHTNESS_CHANNEL: &CStr = c"denial/brightness";
 const BRIGHTNESS_STATE_CHANNEL: &CStr = c"denial/brightness_state";
+const SOFTWARE_DIMMING_CHANNEL: &CStr = c"denial/software_dimming";
+const SOFTWARE_DIMMING_STATE_CHANNEL: &CStr = c"denial/software_dimming_state";
 const WINDOW_CLOSE_COMPLETE_CHANNEL: &CStr = c"denial/window_close_complete";
 const CURSOR_PRESENTED_CHANNEL: &CStr = c"denial/cursor_presented";
 const GLFW_MOD_CONTROL: u32 = 0x0002;
@@ -147,6 +149,7 @@ const MAX_LIVE_EXTERNAL_TEXTURE_RESOURCES: usize = 1024;
 const PLATFORM_TASK_MAX_DISPATCH_TIMEOUT: Duration = Duration::from_millis(100);
 const MAX_PENDING_AUDIO_REQUESTS: usize = 128;
 const MAX_PENDING_BRIGHTNESS_REQUESTS: usize = 128;
+const MAX_PENDING_SOFTWARE_DIMMING_REQUESTS: usize = 128;
 const MAX_PENDING_UI_DEVELOPMENT_COMMANDS: usize = 64;
 const WINDOW_CLOSE_LEASE_TIMEOUT: Duration = Duration::from_secs(5);
 const RENDER_AUDIT_INTERVAL: Duration = Duration::from_secs(1);
@@ -449,6 +452,38 @@ fn decode_cursor_presented(data: &[u8]) -> Option<u64> {
     (epoch > 0).then_some(epoch)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum TextureOutputMembership {
+    One(OutputId),
+    Two([OutputId; 2]),
+    Many(Arc<[OutputId]>),
+}
+
+impl TextureOutputMembership {
+    fn from_outputs(mut outputs: impl Iterator<Item = OutputId>) -> Option<Self> {
+        let first = outputs.next()?;
+        let Some(second) = outputs.next() else {
+            return Some(Self::One(first));
+        };
+        let Some(third) = outputs.next() else {
+            return Some(Self::Two([first, second]));
+        };
+
+        let mut many = Vec::with_capacity(outputs.size_hint().0.saturating_add(3));
+        many.extend([first, second, third]);
+        many.extend(outputs);
+        Some(Self::Many(many.into()))
+    }
+
+    fn outputs(&self) -> &[OutputId] {
+        match self {
+            Self::One(output) => std::slice::from_ref(output),
+            Self::Two(outputs) => outputs,
+            Self::Many(outputs) => outputs,
+        }
+    }
+}
+
 pub struct FlutterRuntime {
     host: Option<EngineHost>,
     handler: Arc<FlutterGlHandler>,
@@ -462,6 +497,7 @@ pub struct FlutterRuntime {
     authentication: Arc<super::authentication::AuthenticationController>,
     pending_audio_requests: VecDeque<super::system_controls::AudioRequest>,
     pending_brightness_requests: VecDeque<super::system_controls::BrightnessRequest>,
+    pending_software_dimming_requests: VecDeque<super::gamma_control::SoftwareDimmingRequest>,
     pending_ui_development_commands: VecDeque<super::ui_development::UiDevelopmentCommand>,
     pending_idle_policy: Option<idle_policy::IdlePolicyConfiguration>,
     pending_dpms_off: bool,
@@ -481,7 +517,7 @@ pub struct FlutterRuntime {
     output_rotation_animation: Option<OutputRotationAnimation>,
     pending_output_geometry: Option<PendingOutputGeometry>,
     render_output_ffi_scratch: RenderOutputFfiScratch,
-    texture_output_membership: HashMap<i64, Arc<[OutputId]>>,
+    texture_output_membership: HashMap<i64, TextureOutputMembership>,
     pending_output_updates: BTreeMap<OutputId, BTreeSet<i64>>,
     changed_texture_scratch: Vec<i64>,
     render_view_scratch: Vec<i64>,

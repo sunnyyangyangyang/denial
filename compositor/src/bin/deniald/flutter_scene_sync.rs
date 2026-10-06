@@ -168,9 +168,11 @@ pub(super) fn synchronize_flutter_input_layout(
         .as_mut()
         .expect("checked Wayland frontend disappeared");
     let (previous, sampling_changed, routing_changed) = frontend.install_input_layout(layout);
+    let first_generation_layout = previous.is_none();
     if let Some(previous) = previous {
         runtime.recycle_input_layout(previous);
     }
+    events.queue_replacement_flutter_rehydration_if_ready(first_generation_layout);
     if sampling_changed {
         // `expects_sample` is part of the external-texture mailbox contract,
         // not the Dart window metadata. Republish the scene when a window

@@ -132,9 +132,7 @@ class _DesktopSceneWindows {
   // windows. Each keyed frame and popup layer selects its own current window.
   _DesktopSceneWindows(List<DenialWindow> windows)
     : windows = List<DenialWindow>.unmodifiable(
-        windows.where(
-          (window) => window.isUserApp || window.isInputMethodPopup,
-        ),
+        windows.where((window) => window.isUserApp || window.isPopupSurface),
       );
 
   final List<DenialWindow> windows;
@@ -192,7 +190,7 @@ class _DesktopSceneWorkspace {
 
 typedef _DesktopSceneTopology = ({
   Map<int, DenialWindow> windowsById,
-  List<DenialWindow> inputMethodPopups,
+  List<DenialWindow> popupSurfaces,
   List<DesktopWindowPlacement> placements,
   int topZ,
 });
@@ -725,7 +723,7 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
     }
     final binary = environment['DENIAL_SETTINGS_BINARY']?.trim();
     final executable = binary == null || binary.isEmpty
-        ? '/usr/bin/denial-settings'
+        ? 'denial-settings'
         : binary;
     ref.read(denialBridgeProvider).launchApplication(<String>[
       executable,
@@ -945,7 +943,9 @@ class _DesktopShellState extends ConsumerState<DesktopShell> {
               panelDurationScale: animations.durationScale,
               windowSwitcher: windowSwitcher,
               displayLayout: displayLayout,
-              frameTimingOptions: ref.watch(shellFrameTimingOptionsProvider),
+              showFrameTimingOverlay: ref.watch(
+                shellFrameTimingOverlayProvider,
+              ),
               wallpaperSelectorVisible: wallpaperSelectorVisible,
               shellOutputRect: shellOutput?.logicalRect,
               mainOutputRect: mainOutput?.logicalRect,

@@ -1190,35 +1190,6 @@ abstract class AppLocalizations {
   /// **'Volume for {applicationName}'**
   String desktopVolumeForApplication(String applicationName);
 
-  /// English UI text for frameAppRendering.
-  ///
-  /// In en, this message translates to:
-  /// **'APP · {title} · RENDER'**
-  String frameAppRendering(String title);
-
-  /// English UI text for frameAppWaiting.
-  ///
-  /// In en, this message translates to:
-  /// **'APP · {title} · WAIT'**
-  String frameAppWaiting(String title);
-
-  /// English UI text for frameImportedStats.
-  ///
-  /// In en, this message translates to:
-  /// **'AVG {average}  MAX {maximum}  OVER {overBudget}  N {samples}'**
-  String frameImportedStats(
-    String average,
-    String maximum,
-    int overBudget,
-    int samples,
-  );
-
-  /// English UI text for frameImportedStatsUnavailable.
-  ///
-  /// In en, this message translates to:
-  /// **'AVG --.-  MAX --.-  OVER -  N -'**
-  String get frameImportedStatsUnavailable;
-
   /// English UI text for frameMilliseconds.
   ///
   /// In en, this message translates to:
@@ -1852,6 +1823,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{outputName} brightness'**
   String outputBrightnessSemantics(String outputName);
+
+  /// Accessible label for an output gamma-LUT dimming slider.
+  ///
+  /// In en, this message translates to:
+  /// **'{outputName} software dimming'**
+  String outputSoftwareDimmingSemantics(String outputName);
+
+  /// Label for an output that has no usable DRM gamma LUT.
+  ///
+  /// In en, this message translates to:
+  /// **'{outputName} software dimming (unavailable)'**
+  String outputSoftwareDimmingUnavailable(String outputName);
 
   /// English UI text for outputVolumeSemantics.
   ///
@@ -3149,11 +3132,101 @@ abstract class AppLocalizations {
   /// **'Done'**
   String get settingsColorPickerDone;
 
-  /// Pointer and keyboard instructions displayed below the color wheel.
+  /// Instructions displayed between the color wheel and exact color-value editor.
   ///
   /// In en, this message translates to:
-  /// **'Drag to choose a color. Use the arrow keys for fine adjustments.'**
+  /// **'Choose visually or enter exact color values.'**
   String get settingsColorPickerInstructions;
+
+  /// Heading for exact color-value input controls.
+  ///
+  /// In en, this message translates to:
+  /// **'Color values'**
+  String get settingsColorInputTitle;
+
+  /// Label for RGB color-value input mode.
+  ///
+  /// In en, this message translates to:
+  /// **'RGB'**
+  String get settingsColorInputRgb;
+
+  /// Label for HSL color-value input mode.
+  ///
+  /// In en, this message translates to:
+  /// **'HSL'**
+  String get settingsColorInputHsl;
+
+  /// Label for hexadecimal color-value input mode.
+  ///
+  /// In en, this message translates to:
+  /// **'HEX'**
+  String get settingsColorInputHex;
+
+  /// Label for the red RGB channel input.
+  ///
+  /// In en, this message translates to:
+  /// **'Red'**
+  String get settingsColorInputRed;
+
+  /// Label for the green RGB channel input.
+  ///
+  /// In en, this message translates to:
+  /// **'Green'**
+  String get settingsColorInputGreen;
+
+  /// Label for the blue RGB channel input.
+  ///
+  /// In en, this message translates to:
+  /// **'Blue'**
+  String get settingsColorInputBlue;
+
+  /// Label for the HSL hue input.
+  ///
+  /// In en, this message translates to:
+  /// **'Hue'**
+  String get settingsColorInputHue;
+
+  /// Label for the HSL saturation input.
+  ///
+  /// In en, this message translates to:
+  /// **'Saturation'**
+  String get settingsColorInputSaturation;
+
+  /// Label for the HSL lightness input.
+  ///
+  /// In en, this message translates to:
+  /// **'Lightness'**
+  String get settingsColorInputLightness;
+
+  /// Label for the exact hexadecimal color input.
+  ///
+  /// In en, this message translates to:
+  /// **'Hex color'**
+  String get settingsColorInputHexValue;
+
+  /// Keyboard hint below exact color channel inputs.
+  ///
+  /// In en, this message translates to:
+  /// **'Use ↑↓ to nudge · Hold Shift for 10'**
+  String get settingsColorInputNudgeHint;
+
+  /// Validation error for out-of-range RGB color values.
+  ///
+  /// In en, this message translates to:
+  /// **'Use RGB values from 0 to 255.'**
+  String get settingsColorInputRgbError;
+
+  /// Validation error for out-of-range HSL color values.
+  ///
+  /// In en, this message translates to:
+  /// **'Use H 0–360 and S/L 0–100.'**
+  String get settingsColorInputHslError;
+
+  /// Validation error for an invalid hexadecimal color value.
+  ///
+  /// In en, this message translates to:
+  /// **'Use 3 or 6 hex digits.'**
+  String get settingsColorInputHexError;
 
   /// Button label that restores the default border color.
   ///
@@ -3365,6 +3438,18 @@ abstract class AppLocalizations {
   /// **'Monitor configuration'**
   String get settingsDisplayArrangementTitle;
 
+  /// Label for including a connected monitor in the desktop.
+  ///
+  /// In en, this message translates to:
+  /// **'Use this display'**
+  String get settingsDisplayEnabled;
+
+  /// Explanation shown below the monitor enable toggle.
+  ///
+  /// In en, this message translates to:
+  /// **'Include this monitor in the desktop. At least one display must remain enabled.'**
+  String get settingsDisplayEnabledDescription;
+
   /// English UI text for settingsDisplayBrightnessDescription.
   ///
   /// In en, this message translates to:
@@ -3433,7 +3518,7 @@ abstract class AppLocalizations {
   /// Explains the primary display selector and its automatic fallback.
   ///
   /// In en, this message translates to:
-  /// **'Shell surfaces open on the primary display. Automatic uses the connected display with the highest refresh rate.'**
+  /// **'Shell surfaces open on the primary display. Automatic uses the enabled display with the highest refresh rate.'**
   String get settingsDisplayPrimaryHint;
 
   /// Label for the monitor refresh-rate selector.
@@ -3463,7 +3548,7 @@ abstract class AppLocalizations {
   /// Label for a monitor rotated by 90 degrees.
   ///
   /// In en, this message translates to:
-  /// **'90° clockwise'**
+  /// **'90° counterclockwise'**
   String get settingsDisplayRotation90;
 
   /// Label for a monitor rotated by 180 degrees.
@@ -3475,8 +3560,38 @@ abstract class AppLocalizations {
   /// Label for a monitor rotated by 270 degrees.
   ///
   /// In en, this message translates to:
-  /// **'90° counterclockwise'**
+  /// **'90° clockwise'**
   String get settingsDisplayRotation270;
+
+  /// Label for choosing the scrolling window layout axis on one monitor.
+  ///
+  /// In en, this message translates to:
+  /// **'Scrolling layout axis'**
+  String get settingsDisplayScrollingLayoutAxis;
+
+  /// Explanation shown beside the per-monitor scrolling layout axis selector.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose how scrolling windows are arranged on this display.'**
+  String get settingsDisplayScrollingLayoutAxisDescription;
+
+  /// Choice that derives the scrolling layout axis from the monitor rotation.
+  ///
+  /// In en, this message translates to:
+  /// **'Automatic (follows rotation)'**
+  String get settingsDisplayScrollingLayoutAxisAuto;
+
+  /// Choice that forces a horizontal scrolling window strip.
+  ///
+  /// In en, this message translates to:
+  /// **'Horizontal'**
+  String get settingsDisplayScrollingLayoutAxisHorizontal;
+
+  /// Choice that forces a vertical scrolling window strip.
+  ///
+  /// In en, this message translates to:
+  /// **'Vertical'**
+  String get settingsDisplayScrollingLayoutAxisVertical;
 
   /// Label for the monitor scale selector.
   ///
@@ -4537,7 +4652,7 @@ abstract class AppLocalizations {
   /// Explains the available desktop window layouts.
   ///
   /// In en, this message translates to:
-  /// **'Stacking lets windows overlap. Tiling divides the desktop dynamically. Scrolling follows focus along a strip that turns vertical with a quarter-turned monitor.'**
+  /// **'Stacking lets windows overlap. Tiling divides the desktop dynamically. Scrolling follows focus along a strip; its axis is configured per display and follows rotation by default.'**
   String get settingsWindowLayoutDescription;
 
   /// Label for the Dwindle tiling window layout.
@@ -4563,6 +4678,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Window layout'**
   String get settingsWindowLayoutTitle;
+
+  /// Heading for mouse-wheel navigation in the scrolling window layout.
+  ///
+  /// In en, this message translates to:
+  /// **'Super + mouse wheel'**
+  String get settingsScrollingLayoutWheelTitle;
+
+  /// Explains the scrolling-layout mouse-wheel shortcut.
+  ///
+  /// In en, this message translates to:
+  /// **'Hold Super and turn the mouse wheel to scroll the window strip.'**
+  String get settingsScrollingLayoutWheelDescription;
+
+  /// Label for the scrolling-layout mouse-wheel speed slider.
+  ///
+  /// In en, this message translates to:
+  /// **'Wheel speed'**
+  String get settingsScrollingLayoutWheelSpeed;
+
+  /// Label for choosing the scrolling-layout direction of a wheel-up gesture.
+  ///
+  /// In en, this message translates to:
+  /// **'Wheel up moves'**
+  String get settingsScrollingLayoutWheelUpDirection;
+
+  /// Choice that maps mouse-wheel up to leftward scrolling-layout travel.
+  ///
+  /// In en, this message translates to:
+  /// **'Left'**
+  String get settingsScrollingLayoutWheelUpLeft;
+
+  /// Choice that maps mouse-wheel up to rightward scrolling-layout travel.
+  ///
+  /// In en, this message translates to:
+  /// **'Right'**
+  String get settingsScrollingLayoutWheelUpRight;
 
   /// Heading for monitor-local workspace settings.
   ///
@@ -6111,6 +6262,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Finding wallpapers…'**
   String get wallpaperFinding;
+
+  /// Hint identifying the folder scanned for manually added wallpapers.
+  ///
+  /// In en, this message translates to:
+  /// **'Add your own wallpapers to {directory}.'**
+  String wallpaperFolderHint(String directory);
+
+  /// Warning shown when the remote wallpaper image server cannot be reached.
+  ///
+  /// In en, this message translates to:
+  /// **'Online wallpapers are unavailable. Local wallpapers still work.'**
+  String get wallpaperImageServerUnavailable;
 
   /// Accessibility label for leaving mobile wallpaper positioning.
   ///

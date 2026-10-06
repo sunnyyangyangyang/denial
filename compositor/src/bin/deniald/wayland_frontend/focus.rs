@@ -6,7 +6,10 @@ use smithay::input::keyboard::{KeyboardHandle, KeyboardTarget, KeysymHandle, Mod
 use smithay::input::{Seat, SeatHandler};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{IsAlive, Serial};
+use smithay::wayland::compositor::with_states;
 use smithay::wayland::seat::WaylandFocus;
+use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
+#[cfg(feature = "xwayland")]
 use smithay::xwayland::X11Surface;
 
 use super::super::RuntimeState;
@@ -25,6 +28,7 @@ use super::super::RuntimeState;
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum KeyboardFocusTarget {
     Wayland(WlSurface),
+    #[cfg(feature = "xwayland")]
     X11(X11Surface),
     #[cfg(feature = "flutter")]
     Flutter,
@@ -42,6 +46,37 @@ impl From<PopupKind> for KeyboardFocusTarget {
     }
 }
 
+impl KeyboardFocusTarget {
+    pub(super) fn seat_focus_kind(&self) -> super::SeatFocusKind {
+        match self {
+            Self::Wayland(_) => super::SeatFocusKind::Wayland,
+            #[cfg(feature = "xwayland")]
+            Self::X11(_) => super::SeatFocusKind::Xwayland,
+            #[cfg(feature = "flutter")]
+            Self::Flutter => super::SeatFocusKind::None,
+        }
+    }
+
+    pub(super) fn window_metadata(&self) -> Option<(String, String)> {
+        match self {
+            Self::Wayland(surface) => with_states(surface, |states| {
+                let attributes = states.data_map.get::<XdgToplevelSurfaceData>()?;
+                let attributes = attributes
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                Some((
+                    attributes.title.clone().unwrap_or_default(),
+                    attributes.app_id.clone().unwrap_or_default(),
+                ))
+            }),
+            #[cfg(feature = "xwayland")]
+            Self::X11(surface) => Some((surface.title(), surface.class())),
+            #[cfg(feature = "flutter")]
+            Self::Flutter => None,
+        }
+    }
+}
+
 // Smithay's popup-grab API requires the pointer focus type to be infallibly
 // constructible from the keyboard focus type. Popup grabs only contain
 // client-owned targets; the compositor-owned Flutter target never crosses
@@ -50,6 +85,7 @@ impl From<KeyboardFocusTarget> for WlSurface {
     fn from(target: KeyboardFocusTarget) -> Self {
         match target {
             KeyboardFocusTarget::Wayland(surface) => surface,
+            #[cfg(feature = "xwayland")]
             KeyboardFocusTarget::X11(surface) => surface
                 .wl_surface()
                 .expect("focused X11 window has no associated wl_surface"),
@@ -65,6 +101,7 @@ impl IsAlive for KeyboardFocusTarget {
     fn alive(&self) -> bool {
         match self {
             Self::Wayland(surface) => surface.alive(),
+            #[cfg(feature = "xwayland")]
             Self::X11(surface) => surface.alive(),
             #[cfg(feature = "flutter")]
             Self::Flutter => true,
@@ -82,6 +119,7 @@ impl KeyboardTarget<RuntimeState> for KeyboardFocusTarget {
     ) {
         match self {
             Self::Wayland(surface) => KeyboardTarget::enter(surface, seat, data, keys, serial),
+            #[cfg(feature = "xwayland")]
             Self::X11(surface) => KeyboardTarget::enter(surface, seat, data, keys, serial),
             #[cfg(feature = "flutter")]
             Self::Flutter => {}
@@ -91,6 +129,7 @@ impl KeyboardTarget<RuntimeState> for KeyboardFocusTarget {
     fn leave(&self, seat: &Seat<RuntimeState>, data: &mut RuntimeState, serial: Serial) {
         match self {
             Self::Wayland(surface) => KeyboardTarget::leave(surface, seat, data, serial),
+            #[cfg(feature = "xwayland")]
             Self::X11(surface) => KeyboardTarget::leave(surface, seat, data, serial),
             #[cfg(feature = "flutter")]
             Self::Flutter => super::input::leave_focused_flutter_keyboard(data),
@@ -108,6 +147,7 @@ impl KeyboardTarget<RuntimeState> for KeyboardFocusTarget {
     ) {
         match self {
             Self::Wayland(surface) => surface.key(seat, data, key, state, serial, time),
+            #[cfg(feature = "xwayland")]
             Self::X11(surface) => surface.key(seat, data, key, state, serial, time),
             #[cfg(feature = "flutter")]
             Self::Flutter => super::input::dispatch_focused_flutter_key(data, key, state),
@@ -123,6 +163,7 @@ impl KeyboardTarget<RuntimeState> for KeyboardFocusTarget {
     ) {
         match self {
             Self::Wayland(surface) => surface.modifiers(seat, data, modifiers, serial),
+            #[cfg(feature = "xwayland")]
             Self::X11(surface) => surface.modifiers(seat, data, modifiers, serial),
             #[cfg(feature = "flutter")]
             Self::Flutter => {}
@@ -134,6 +175,7 @@ impl WaylandFocus for KeyboardFocusTarget {
     fn wl_surface(&self) -> Option<Cow<'_, WlSurface>> {
         match self {
             Self::Wayland(surface) => Some(Cow::Borrowed(surface)),
+            #[cfg(feature = "xwayland")]
             Self::X11(surface) => surface.wl_surface().map(Cow::Owned),
             #[cfg(feature = "flutter")]
             Self::Flutter => None,

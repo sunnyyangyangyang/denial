@@ -451,6 +451,7 @@ pub(super) enum SeatFocusKind {
     #[default]
     None,
     Wayland,
+    #[cfg_attr(not(feature = "xwayland"), allow(dead_code))]
     Xwayland,
 }
 

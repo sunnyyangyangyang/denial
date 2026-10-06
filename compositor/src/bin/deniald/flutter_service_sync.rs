@@ -326,13 +326,10 @@ pub(super) fn synchronize_xembed_tray(
     runtime: &mut flutter_runtime::FlutterRuntime,
     events: &mut RuntimeState,
 ) -> Result<(), Box<dyn Error>> {
-    if let Some(tray) = events
-        .wayland
-        .as_ref()
-        .and_then(|frontend| frontend.xembed_tray.as_ref())
-        && tray.take_event_signal()
+    if let Some(xwayland) = events.wayland.as_ref().map(|frontend| &frontend.xwayland)
+        && xwayland.take_xembed_event_signal()
     {
-        while let Some(event) = tray.try_event() {
+        while let Some(event) = xwayland.try_xembed_event() {
             if let Err(error) = runtime.send_xembed_tray_event(&event) {
                 warn!(
                     %error,
@@ -348,15 +345,11 @@ pub(super) fn synchronize_xembed_tray(
         runtime.drain_xembed_tray_commands().for_each(drop);
         return Ok(());
     }
-    let Some(tray) = events
-        .wayland
-        .as_ref()
-        .and_then(|frontend| frontend.xembed_tray.as_ref())
-    else {
+    let Some(xwayland) = events.wayland.as_ref().map(|frontend| &frontend.xwayland) else {
         return Ok(());
     };
     for command in runtime.drain_xembed_tray_commands() {
-        if !tray.invoke(command) {
+        if !xwayland.invoke_xembed(command) {
             warn!(
                 window = command.window_id,
                 "could not queue Flutter XEmbed tray command"

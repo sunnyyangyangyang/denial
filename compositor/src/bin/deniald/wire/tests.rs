@@ -204,6 +204,43 @@ fn system_bar_request_rejects_invalid_work_area_metrics() {
 }
 
 #[test]
+fn display_layout_carries_authoritative_active_workspaces() {
+    let mut bridge = bridge();
+    let update = bridge.update_active_workspace(9, 4).unwrap().to_vec();
+    let envelope = fb::root_as_envelope(&update).unwrap();
+    let layout = envelope
+        .payload_as_window_response()
+        .unwrap()
+        .display_layout()
+        .unwrap();
+    let outputs = layout.outputs().unwrap();
+    let workspaces = outputs
+        .iter()
+        .map(|output| (output.monitor_id(), output.active_workspace()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(workspaces, BTreeMap::from([(7, 1), (9, 4)]));
+
+    let request = request(fb::WindowRequestKind::GetDisplayLayout, 44);
+    let response = bridge.handle(&request).unwrap().unwrap();
+    let envelope = fb::root_as_envelope(response).unwrap();
+    let outputs = envelope
+        .payload_as_window_response()
+        .unwrap()
+        .display_layout()
+        .unwrap()
+        .outputs()
+        .unwrap();
+    assert_eq!(
+        outputs
+            .iter()
+            .find(|output| output.monitor_id() == 9)
+            .unwrap()
+            .active_workspace(),
+        4
+    );
+}
+
+#[test]
 fn workspace_requests_preserve_monitor_membership_and_follow_policy() {
     let mut bridge = bridge();
     assert!(

@@ -3,7 +3,7 @@ import 'package:flutter/widgets.dart';
 import '../../localization/denial_localizations.dart';
 import '../../models/denial_window.dart';
 import '../../theme/shell_theme.dart';
-import '../window_hero.dart';
+import '../window_surface.dart';
 
 /// The retained texture shared by portrait and landscape recents.
 class OverviewWindowPreview extends StatelessWidget {

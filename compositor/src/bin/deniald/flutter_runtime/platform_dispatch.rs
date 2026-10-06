@@ -176,6 +176,22 @@ impl FlutterRuntime {
                 ),
                 Err(error) => warn!(%error, "rejected Denial brightness request from Flutter"),
             }
+        } else if message.channel.as_bytes() == SOFTWARE_DIMMING_CHANNEL.to_bytes() {
+            match crate::gamma_control::decode_software_dimming_request(&message.data) {
+                Ok(request)
+                    if self.pending_software_dimming_requests.len()
+                        < MAX_PENDING_SOFTWARE_DIMMING_REQUESTS =>
+                {
+                    self.pending_software_dimming_requests.push_back(request);
+                }
+                Ok(_) => warn!(
+                    limit = MAX_PENDING_SOFTWARE_DIMMING_REQUESTS,
+                    "dropped excess Denial software-dimming request from Flutter"
+                ),
+                Err(error) => {
+                    warn!(%error, "rejected Denial software-dimming request from Flutter")
+                }
+            }
         } else if message.channel.as_bytes() == crate::ui_development::CONTROL_CHANNEL.to_bytes() {
             match crate::ui_development::decode_control_packet(&message.data) {
                 Ok(command)

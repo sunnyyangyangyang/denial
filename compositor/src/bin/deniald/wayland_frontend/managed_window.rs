@@ -15,8 +15,12 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::{
     SurfaceCachedState, ToplevelState, ToplevelSurface, XdgToplevelSurfaceData,
 };
+#[cfg(feature = "xwayland")]
 use smithay::xwayland::xwm::{WmWindowType, X11Surface};
+#[cfg(feature = "xwayland")]
 use tracing::warn;
+
+use super::{KeyboardFocusTarget, WindowIdentity};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct ClientWindowState {
@@ -25,7 +29,7 @@ pub(super) struct ClientWindowState {
     pub(super) resizing: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct ManagedWindowFacts {
     pub(super) client_state: ClientWindowState,
     pub(super) server_side_decorated: bool,
@@ -33,6 +37,10 @@ pub(super) struct ManagedWindowFacts {
     pub(super) override_redirect: bool,
     pub(super) minimum_size: Size<i32, Logical>,
     pub(super) maximum_size: Size<i32, Logical>,
+    pub(super) x11: bool,
+    pub(super) protocol_window_id: Option<u32>,
+    pub(super) transient_parent_id: Option<u32>,
+    pub(super) opacity: f32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,6 +53,7 @@ pub(super) enum ClientStateRequestKind {
 
 enum ManagedWindowProtocol<'a> {
     Xdg(&'a ToplevelSurface),
+    #[cfg(feature = "xwayland")]
     X11(&'a X11Surface),
 }
 
@@ -69,10 +78,18 @@ pub(super) struct ManagedWindow<'a> {
 
 impl<'a> ManagedWindow<'a> {
     pub(super) fn new(window: &'a Window) -> Option<Self> {
-        let protocol = if let Some(toplevel) = window.toplevel() {
-            ManagedWindowProtocol::Xdg(toplevel)
-        } else {
-            ManagedWindowProtocol::X11(window.x11_surface()?)
+        let protocol = match window.toplevel() {
+            Some(toplevel) => ManagedWindowProtocol::Xdg(toplevel),
+            None => {
+                #[cfg(feature = "xwayland")]
+                {
+                    ManagedWindowProtocol::X11(window.x11_surface()?)
+                }
+                #[cfg(not(feature = "xwayland"))]
+                {
+                    return None;
+                }
+            }
         };
         Some(Self { protocol })
     }
@@ -96,8 +113,13 @@ impl<'a> ManagedWindow<'a> {
                     override_redirect: false,
                     minimum_size,
                     maximum_size,
+                    x11: false,
+                    protocol_window_id: None,
+                    transient_parent_id: None,
+                    opacity: 1.0,
                 }
             }
+            #[cfg(feature = "xwayland")]
             ManagedWindowProtocol::X11(surface) => {
                 let auxiliary = !matches!(surface.window_type(), None | Some(WmWindowType::Normal));
                 let protocol_popup = matches!(
@@ -126,14 +148,90 @@ impl<'a> ManagedWindow<'a> {
                     override_redirect: surface.is_override_redirect(),
                     minimum_size: surface.min_size().unwrap_or_else(|| Size::from((0, 0))),
                     maximum_size: surface.max_size().unwrap_or_else(|| Size::from((0, 0))),
+                    x11: true,
+                    protocol_window_id: Some(surface.window_id()),
+                    transient_parent_id: surface.is_transient_for(),
+                    opacity: normalized_x11_opacity(surface.opacity()),
                 }
             }
+        }
+    }
+
+    pub(super) fn keyboard_focus_target(&self) -> Option<KeyboardFocusTarget> {
+        match self.protocol {
+            ManagedWindowProtocol::Xdg(toplevel) => {
+                Some(KeyboardFocusTarget::Wayland(toplevel.wl_surface().clone()))
+            }
+            #[cfg(feature = "xwayland")]
+            ManagedWindowProtocol::X11(surface) => {
+                // Override-redirect windows are client-owned popups, not XWM
+                // activation targets. Focusing one dismisses clients such as
+                // Steam when their managed owner receives FocusOut.
+                if surface.is_override_redirect() {
+                    return None;
+                }
+                // Preserve X11Surface so Smithay performs the ICCCM focus
+                // handshake as well as forwarding wl_keyboard events.
+                surface.wl_surface()?;
+                Some(KeyboardFocusTarget::X11(surface.clone()))
+            }
+        }
+    }
+
+    pub(super) fn metadata(&self) -> (String, String) {
+        let mut title = String::new();
+        let mut app_id = String::new();
+        self.write_metadata(&mut title, &mut app_id);
+        (title, app_id)
+    }
+
+    pub(super) fn write_metadata(&self, title: &mut String, app_id: &mut String) {
+        match self.protocol {
+            ManagedWindowProtocol::Xdg(toplevel) => {
+                with_states(toplevel.wl_surface(), |states| {
+                    let Some(attributes) = states.data_map.get::<XdgToplevelSurfaceData>() else {
+                        return;
+                    };
+                    let attributes = attributes
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if let Some(value) = &attributes.title {
+                        title.push_str(value);
+                    }
+                    if let Some(value) = &attributes.app_id {
+                        app_id.push_str(value);
+                    }
+                });
+            }
+            #[cfg(feature = "xwayland")]
+            ManagedWindowProtocol::X11(surface) => {
+                title.push_str(&surface.title());
+                app_id.push_str(&surface.class());
+            }
+        }
+    }
+
+    pub(super) fn identity(&self) -> Option<WindowIdentity> {
+        match self.protocol {
+            ManagedWindowProtocol::Xdg(toplevel) => with_states(toplevel.wl_surface(), |states| {
+                let attributes = states
+                    .data_map
+                    .get::<XdgToplevelSurfaceData>()?
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                WindowIdentity::wayland(attributes.app_id.as_deref()?)
+            }),
+            #[cfg(feature = "xwayland")]
+            ManagedWindowProtocol::X11(surface) => (!surface.is_override_redirect())
+                .then(|| surface.class())
+                .and_then(|class| WindowIdentity::x11(&class)),
         }
     }
 
     pub(super) fn can_store_client_restore(&self) -> bool {
         match self.protocol {
             ManagedWindowProtocol::Xdg(toplevel) => toplevel.is_initial_configure_sent(),
+            #[cfg(feature = "xwayland")]
             ManagedWindowProtocol::X11(_) => true,
         }
     }
@@ -206,6 +304,7 @@ impl<'a> ManagedWindow<'a> {
                 }
                 changed
             }
+            #[cfg(feature = "xwayland")]
             ManagedWindowProtocol::X11(surface) => {
                 let before = self.facts().client_state;
                 let changed = match request {
@@ -274,6 +373,7 @@ impl<'a> ManagedWindow<'a> {
                     fullscreen || maximized
                 })
             }
+            #[cfg(feature = "xwayland")]
             ManagedWindowProtocol::X11(surface) => {
                 let fullscreen = surface.is_fullscreen();
                 let maximized = surface.is_maximized();
@@ -291,12 +391,16 @@ impl<'a> ManagedWindow<'a> {
     /// Performs the protocol handshake for a shell-owned geometry target.
     /// The target itself is applied once by `set_window_geometry_target`.
     pub(super) fn prepare_shell_geometry(&self, target: Rectangle<i32, Logical>) {
-        if let ManagedWindowProtocol::Xdg(toplevel) = self.protocol {
-            toplevel.with_pending_state(|pending| {
-                pending.states.unset(xdg_toplevel::State::Resizing);
-                pending.size = Some(target.size);
-            });
-            toplevel.send_pending_configure();
+        match self.protocol {
+            ManagedWindowProtocol::Xdg(toplevel) => {
+                toplevel.with_pending_state(|pending| {
+                    pending.states.unset(xdg_toplevel::State::Resizing);
+                    pending.size = Some(target.size);
+                });
+                toplevel.send_pending_configure();
+            }
+            #[cfg(feature = "xwayland")]
+            ManagedWindowProtocol::X11(_) => {}
         }
     }
 
@@ -305,41 +409,54 @@ impl<'a> ManagedWindow<'a> {
         &self,
         target: Rectangle<i32, Logical>,
         force_resize: bool,
+        maximized: bool,
     ) {
         match self.protocol {
             ManagedWindowProtocol::Xdg(toplevel) => {
                 let client_maximized = toplevel_has_state(toplevel, xdg_toplevel::State::Maximized);
-                toplevel.with_pending_state(|pending| {
+                let state_changed = toplevel.with_pending_state(|pending| {
                     pending.states.unset(xdg_toplevel::State::Resizing);
-                    pending.states.unset(xdg_toplevel::State::Maximized);
+                    let changed = if maximized {
+                        pending.states.set(xdg_toplevel::State::Maximized)
+                    } else {
+                        pending.states.unset(xdg_toplevel::State::Maximized)
+                    };
                     pending.size = Some(target.size);
+                    changed
                 });
-                if toplevel.is_initial_configure_sent() && (client_maximized || force_resize) {
+                if toplevel.is_initial_configure_sent()
+                    && (state_changed || client_maximized != maximized || force_resize)
+                {
                     // Force a new serial when a prior configure already cached
                     // this target but the client still presents its old buffer.
                     toplevel.send_configure();
                 }
             }
+            #[cfg(feature = "xwayland")]
             ManagedWindowProtocol::X11(surface) => {
-                if surface.is_maximized()
-                    && let Err(error) = surface.set_maximized(false)
-                {
-                    warn!(%error, window = surface.window_id(), "could not clear maximize state for tiled window");
+                if surface.is_maximized() != maximized {
+                    if let Err(error) = surface.set_maximized(maximized) {
+                        warn!(%error, window = surface.window_id(), maximized, "could not update maximize state for tiled window");
+                    }
                 }
             }
         }
     }
 
     pub(super) fn prepare_restore_size(&self, size: Size<i32, Logical>, force: bool) {
-        if let ManagedWindowProtocol::Xdg(toplevel) = self.protocol {
-            toplevel.with_pending_state(|pending| pending.size = Some(size));
-            if toplevel.is_initial_configure_sent() {
-                if force {
-                    toplevel.send_configure();
-                } else {
-                    toplevel.send_pending_configure();
+        match self.protocol {
+            ManagedWindowProtocol::Xdg(toplevel) => {
+                toplevel.with_pending_state(|pending| pending.size = Some(size));
+                if toplevel.is_initial_configure_sent() {
+                    if force {
+                        toplevel.send_configure();
+                    } else {
+                        toplevel.send_pending_configure();
+                    }
                 }
             }
+            #[cfg(feature = "xwayland")]
+            ManagedWindowProtocol::X11(_) => {}
         }
     }
 
@@ -359,6 +476,37 @@ impl<'a> ManagedWindow<'a> {
         }
     }
 
+    /// Requests a speculative client size for a layout drop preview.
+    ///
+    /// The frontend deliberately keeps its authoritative geometry contract
+    /// unchanged. XDG clients receive normal interactive-resize state while
+    /// X11 clients need the complete temporary ConfigureWindow rectangle.
+    #[cfg(feature = "flutter")]
+    pub(super) fn prepare_layout_preview(&self, target: Rectangle<i32, Logical>, finished: bool) {
+        match self.protocol {
+            ManagedWindowProtocol::Xdg(toplevel) if toplevel.wl_surface().is_alive() => {
+                toplevel.with_pending_state(|pending| {
+                    if finished {
+                        pending.states.unset(xdg_toplevel::State::Resizing);
+                    } else {
+                        pending.states.set(xdg_toplevel::State::Resizing);
+                    }
+                    pending.size = Some(target.size);
+                });
+                toplevel.send_pending_configure();
+            }
+            #[cfg(feature = "xwayland")]
+            ManagedWindowProtocol::X11(surface)
+                if !surface.is_override_redirect() && surface.last_configure() != target =>
+            {
+                if let Err(error) = surface.configure(target) {
+                    warn!(%error, window = surface.window_id(), "could not configure layout preview geometry");
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn accepts_interactive_resize_updates(&self) -> bool {
         match self.protocol {
             ManagedWindowProtocol::Xdg(toplevel) => {
@@ -369,6 +517,7 @@ impl<'a> ManagedWindow<'a> {
                             && !pending.states.contains(xdg_toplevel::State::Maximized)
                     })
             }
+            #[cfg(feature = "xwayland")]
             ManagedWindowProtocol::X11(surface) => {
                 !surface.is_override_redirect()
                     && !surface.is_fullscreen()
@@ -381,13 +530,18 @@ impl<'a> ManagedWindow<'a> {
     /// is prepared by the higher-level operation that owns its configure
     /// serial; X11 receives its ConfigureWindow here.
     pub(super) fn prepare_geometry_target(&self, target: Rectangle<i32, Logical>, force: bool) {
-        if let ManagedWindowProtocol::X11(surface) = self.protocol
-            && !surface.is_override_redirect()
-            && (force || surface.last_configure() != target)
-            && let Err(error) = surface.configure(target)
+        #[cfg(feature = "xwayland")]
         {
-            warn!(%error, window = surface.window_id(), "could not configure managed window geometry");
+            if let ManagedWindowProtocol::X11(surface) = self.protocol
+                && !surface.is_override_redirect()
+                && (force || surface.last_configure() != target)
+                && let Err(error) = surface.configure(target)
+            {
+                warn!(%error, window = surface.window_id(), "could not configure managed window geometry");
+            }
         }
+        #[cfg(not(feature = "xwayland"))]
+        let _ = (target, force);
     }
 
     /// Reassert a compositor-owned target after a client committed a
@@ -403,6 +557,7 @@ impl<'a> ManagedWindow<'a> {
                     toplevel.send_configure();
                 }
             }
+            #[cfg(feature = "xwayland")]
             ManagedWindowProtocol::X11(_) => self.prepare_geometry_target(target, true),
         }
     }
@@ -413,6 +568,7 @@ impl<'a> ManagedWindow<'a> {
                 toplevel.send_close();
                 true
             }
+            #[cfg(feature = "xwayland")]
             ManagedWindowProtocol::X11(surface) => {
                 if let Err(error) = surface.close() {
                     warn!(%error, "could not close managed window");
@@ -440,14 +596,21 @@ impl<'a> ManagedWindow<'a> {
                     toplevel.send_pending_configure();
                 }
             }
+            #[cfg(feature = "xwayland")]
             ManagedWindowProtocol::X11(surface) if !minimized => {
                 if let Err(error) = surface.set_hidden(false) {
                     warn!(%error, window = surface.window_id(), "could not restore managed window");
                 }
             }
+            #[cfg(feature = "xwayland")]
             ManagedWindowProtocol::X11(_) => {}
         }
     }
+}
+
+#[cfg(feature = "xwayland")]
+fn normalized_x11_opacity(opacity: Option<u32>) -> f32 {
+    opacity.map_or(1.0, |value| value as f32 / u32::MAX as f32)
 }
 
 pub(super) fn toplevel_has_state(

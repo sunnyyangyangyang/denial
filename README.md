@@ -42,7 +42,7 @@ https://github.com/user-attachments/assets/2c7335bb-7363-46b1-8e3a-0d98c36c64b1
 - Settings for layouts, displays, input, shortcuts, and appearance.
   It's a desktop. You should be able to configure it with a mouse.
 - [Live shell editing and hot reload](#edit-the-shell).
-- Wayland and X11 apps (through Xwayland), multiple monitors, screenshots,
+- Wayland apps, optional X11 support through Xwayland, multiple monitors, screenshots,
   and screen sharing.
 
 Hyprland and niri users are welcome. We won't tell.
@@ -86,8 +86,11 @@ finishes, install Denial with the command for your distribution:
 | Fedora 44 | `sudo dnf install denial` |
 
 Alpine Linux 3.24 has [signed APK downloads](docs/INSTALL.md#alpine-linux-324).
-ARM64 builds are supported [from source](docs/BUILDING.md); NixOS and Void Linux
-have also been tested, with no first-party binaries yet.
+NixOS has a [first-party source flake and module](packaging/nixos/README.md).
+ARM64 builds are supported [from source](docs/BUILDING.md); Void Linux has also
+been tested, with no first-party binary yet. openSUSE Tumbleweed has a
+[native local RPM adapter](packaging/opensuse/README.md); publication is not
+connected yet.
 
 After installing, choose **Denial** from your display manager's session menu.
 

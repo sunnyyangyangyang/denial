@@ -436,6 +436,10 @@ class _SettingsPageBody extends ConsumerWidget {
           settings: settings,
           displayLayout: displayLayout,
           onWindowLayoutChanged: controller.setDesktopWindowLayout,
+          onScrollingLayoutWheelSpeedChanged:
+              controller.setScrollingLayoutWheelSpeed,
+          onScrollingLayoutWheelUpDirectionChanged:
+              controller.setScrollingLayoutWheelUpDirection,
           onWorkspacesEnabledChanged: controller.setWorkspacesEnabled,
           onWorkspaceCountChanged: controller.setWorkspaceCount,
           onWorkspaceSwitchingOrientationChanged:
@@ -558,7 +562,9 @@ class _SettingsDisplaysBody extends ConsumerWidget {
             busy: state.applying,
             onKeep: () => unawaited(controller.keepChanges()),
             onRevert: () => unawaited(controller.rollbackChanges()),
-            onExpired: () => unawaited(controller.refresh()),
+            onExpired: () => unawaited(
+              controller.refreshAfterConfirmationExpiry(confirmation.token),
+            ),
           ),
       ],
     );

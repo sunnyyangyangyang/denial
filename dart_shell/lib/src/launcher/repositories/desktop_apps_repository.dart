@@ -157,6 +157,9 @@ class DesktopAppsRepository {
         .map((category) => category.trim())
         .where((category) => category.isNotEmpty)
         .toList(growable: false);
+    final keywords = _desktopStringList(
+      _localizedDesktopValue(fields, 'Keywords'),
+    );
 
     return DesktopApp(
       id: id,
@@ -164,6 +167,7 @@ class DesktopAppsRepository {
       exec: exec,
       desktopPath: file.path,
       categories: categories,
+      keywords: keywords,
       icon: icon,
       iconPath: iconPath,
       startupWmClass: fields['StartupWMClass']?.trim(),
@@ -646,6 +650,48 @@ Set<String> _desktopList(String? value) {
       .map((item) => item.trim())
       .where((item) => item.isNotEmpty)
       .toSet();
+}
+
+List<String> _desktopStringList(String? value) {
+  if (value == null || value.isEmpty) {
+    return const <String>[];
+  }
+
+  final values = <String>[];
+  var current = StringBuffer();
+
+  void addCurrent() {
+    final item = current.toString().trim();
+    if (item.isNotEmpty) {
+      values.add(item);
+    }
+    current = StringBuffer();
+  }
+
+  for (var index = 0; index < value.length; index += 1) {
+    final character = value[index];
+    if (character == ';') {
+      addCurrent();
+      continue;
+    }
+    if (character != r'\' || index + 1 >= value.length) {
+      current.write(character);
+      continue;
+    }
+
+    final escaped = value[++index];
+    current.write(switch (escaped) {
+      's' => ' ',
+      'n' => '\n',
+      't' => '\t',
+      'r' => '\r',
+      r'\' => r'\',
+      ';' => ';',
+      _ => '${r'\'}$escaped',
+    });
+  }
+  addCurrent();
+  return List<String>.unmodifiable(values);
 }
 
 String _stripSupportedExtension(String icon) {

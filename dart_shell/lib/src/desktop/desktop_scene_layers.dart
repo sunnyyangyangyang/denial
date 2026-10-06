@@ -22,10 +22,10 @@ class _DesktopLayerShellSurface extends StatelessWidget {
     );
     return Positioned.fromRect(
       rect: geometry,
-      // InputLayout currently has binary ownership: either Flutter owns a
-      // region or one Wayland client does. Keep desktop-wide layer surfaces
-      // transparent until it can express lower-priority client regions; this
-      // preserves shell widgets and desktop gestures above a wallpaper.
+      // Flutter paints the client texture, while DesktopInputLayoutPublisher
+      // transfers pointer and touch ownership to the native Wayland route.
+      // Keeping this widget transparent avoids duplicating that lifecycle in
+      // Flutter's gesture arena.
       child: IgnorePointer(
         child: RepaintBoundary(
           child: WindowSurfaceTree(
@@ -68,6 +68,48 @@ Offset _entryDirectionFor(int horizontal, int vertical) {
     return Offset(0, vertical.toDouble());
   }
   return Offset.zero;
+}
+
+/// Owns overview input while keeping wallpaper-plane controls interactive.
+///
+/// The full-scene region transfers native pointer ownership to Flutter. The
+/// dismissal barrier then handles otherwise-unclaimed taps, while controls
+/// painted after it (such as the workspace indicator and system tray) win
+/// Flutter hit testing inside their own bounds.
+class DesktopOverviewInputLayer extends StatelessWidget {
+  const DesktopOverviewInputLayer({
+    required this.active,
+    required this.onBarrierTap,
+    required this.foregroundControls,
+    super.key,
+  });
+
+  final bool active;
+  final ValueChanged<Offset> onBarrierTap;
+  final List<Widget> foregroundControls;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        Positioned.fill(
+          child: ShellInputRegion(
+            debugLabel: 'Desktop overview',
+            active: active,
+            pointerPolicy: ShellPointerPolicy.fullScene,
+            keyboardPolicy: ShellKeyboardPolicy.capture,
+            compositorPolicy: ShellCompositorPolicy.exclusive,
+            child: const IgnorePointer(child: SizedBox.expand()),
+          ),
+        ),
+        Positioned.fill(
+          child: _DesktopOverviewBarrier(active: active, onTap: onBarrierTap),
+        ),
+        ...foregroundControls,
+      ],
+    );
+  }
 }
 
 class _DesktopOverviewBarrier extends StatelessWidget {
@@ -295,11 +337,6 @@ class _DesktopPopupSurfaceLayers extends StatelessWidget {
                 desktopOutputPixelGridForMonitor(layout, placement.monitorId),
           ),
         );
-        final windowLayout = ref.watch(
-          shellSettingsProvider.select(
-            (settings) => settings.layout.windowLayout,
-          ),
-        );
         final devicePixelRatio =
             outputPixelGrid?.scale ?? MediaQuery.devicePixelRatioOf(context);
         final pixelGridOrigin =
@@ -312,10 +349,8 @@ class _DesktopPopupSurfaceLayers extends StatelessWidget {
               )
             : this.frame;
         final transformed = overview || switching || offscreenMinimized;
-        final scrollingOutputClip = desktopScrollingOutputClip(
-          windowLayout: windowLayout,
-          pinned: window.pinned,
-          transformed: transformed,
+        final outputClip = desktopOutputClip(
+          activelyDragging: placement.dragging,
           outputRect: outputPixelGrid?.logicalRect,
         );
         final frame = desktopPixelAlignedWindowFrame(
@@ -330,9 +365,9 @@ class _DesktopPopupSurfaceLayers extends StatelessWidget {
           return const SizedBox.shrink();
         }
 
-        final fullscreenVisual = placement.fullscreen && !transformed;
-        final drawsServerFrame =
-            !fullscreenVisual && placement.serverSideDecorated;
+        final drawsServerFrame = transformed
+            ? placement.serverSideDecorated
+            : placement.drawsLiveServerFrame;
         final contentRect = drawsServerFrame
             ? frame.deflate(DesktopMetrics.frameBorder)
             : frame;
@@ -383,7 +418,7 @@ class _DesktopPopupSurfaceLayers extends StatelessWidget {
                         pixelGridScale: devicePixelRatio,
                         pixelGridOrigin: pixelGridOrigin,
                         alignSizeToDevicePixels: true,
-                        globalClipRect: scrollingOutputClip,
+                        globalClipRect: outputClip,
                         child: ShellBackdropBlur(
                           blur: !layer.opaque || layer.opacity < 1.0,
                           useWindowAlphaThreshold: true,
